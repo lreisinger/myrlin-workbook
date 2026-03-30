@@ -483,6 +483,15 @@ class PtySessionManager {
 
           // Also store on the session object for layout saves
           session.detectedResumeId = uuid;
+
+          // Notify connected clients so the frontend can update its
+          // spawnOpts for accurate layout persistence on restart.
+          const backfillMsg = JSON.stringify({ type: 'resumeId', resumeSessionId: uuid });
+          for (const ws of session.clients) {
+            try {
+              if (ws.readyState === 1) ws.send(backfillMsg);
+            } catch (_) {}
+          }
         } catch (err) {
           console.log(`[PTY] UUID detection failed for ${sessionId}: ${err.message}`);
         }

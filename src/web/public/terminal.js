@@ -563,6 +563,13 @@ class TerminalPane {
             this._status('[Process exited with code ' + msg.exitCode + ']', 'red');
             this.connected = false;
             return;
+          } else if (msg.type === 'resumeId') {
+            // Server detected the Claude session UUID after spawn.
+            // Update spawnOpts so layout saves include the correct resumeSessionId
+            // for accurate session restoration on restart.
+            this.spawnOpts.resumeSessionId = msg.resumeSessionId;
+            this._log('Backfilled resumeSessionId: ' + msg.resumeSessionId);
+            return;
           } else if (msg.type === 'error') {
             this._flushWriteBuffer();
             this._status('[Error: ' + msg.message + ']', 'red');
