@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.10] - 2026-04-01
+
+### Added
+
+- **Android build configuration** - Added package name, SDK targets (API 24-35), permissions (camera, mic, storage, notifications, network), and production AAB build type to unblock EAS Android builds. Fixed Maestro test appId to match the correct package name (PR #40 by @croakingtoad)
+
 ## [0.9.9] - 2026-03-28
 
 ### Fixed
