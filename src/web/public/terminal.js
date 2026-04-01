@@ -257,6 +257,7 @@ class TerminalPane {
     this._writeBuf = '';
     this._activitySample = '';
     this._writeRaf = null;
+    this._pasteHandled = false;
   }
 
   _log(msg) {
@@ -400,10 +401,17 @@ class TerminalPane {
       const xtermTextarea = container.querySelector('.xterm-helper-textarea');
       if (xtermTextarea) {
         xtermTextarea.addEventListener('beforeinput', (e) => {
-          // Block paste events - we handle Ctrl+V/Cmd+V ourselves via
-          // pasteFromClipboard() to avoid xterm.js onData firing twice
+          // Intercept paste-via-beforeinput to prevent xterm.js onData double-send.
+          // Extract the pasted text and send it through our WebSocket instead.
+          // Set _pasteHandled flag so the paste event handler doesn't double-send.
           if (e.inputType === 'insertFromPaste') {
             e.preventDefault();
+            this._pasteHandled = true;
+            const text = e.data || (e.dataTransfer && e.dataTransfer.getData('text/plain')) || '';
+            if (text && this.ws && this.ws.readyState === WebSocket.OPEN) {
+              const bracketedText = '\x1b[200~' + text + '\x1b[201~';
+              this.ws.send(JSON.stringify({ type: 'input', data: bracketedText }));
+            }
             return;
           }
 
@@ -426,10 +434,22 @@ class TerminalPane {
           }
         }, { capture: true });
 
-        // Also block native paste event as a fallback
+        // Intercept native paste events (right-click > Paste, Edit menu, touch-paste)
+        // and route them through our WebSocket instead of letting xterm.js double-send.
+        // Ctrl+V/Cmd+V is handled by the custom key handler. beforeinput may have
+        // already handled this paste (sets _pasteHandled), so check the flag first.
         xtermTextarea.addEventListener('paste', (e) => {
           e.preventDefault();
           e.stopPropagation();
+          if (this._pasteHandled) {
+            this._pasteHandled = false;
+            return;
+          }
+          const text = (e.clipboardData || window.clipboardData || '').getData('text');
+          if (text && this.ws && this.ws.readyState === WebSocket.OPEN) {
+            const bracketedText = '\x1b[200~' + text + '\x1b[201~';
+            this.ws.send(JSON.stringify({ type: 'input', data: bracketedText }));
+          }
         }, { capture: true });
       }
 

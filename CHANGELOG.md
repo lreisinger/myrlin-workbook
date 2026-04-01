@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.12] - 2026-04-01
+
+### Fixed
+
+- **Right-click and menu paste broken in terminal** - The v0.9.4 double-paste fix (PR #34) blocked all native paste events but only provided Ctrl+V/Cmd+V as an alternative. Right-click > Paste, browser Edit > Paste, and touch-paste were completely non-functional. Now intercepts native paste events, extracts the clipboard text, and routes it through the WebSocket with proper bracketed paste sequences. Deduplication flag prevents double-send when both beforeinput and paste events fire.
+
 ## [0.9.11] - 2026-04-01
 
 ### Fixed
