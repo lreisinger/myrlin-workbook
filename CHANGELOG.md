@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.13] - 2026-04-01
+
+### Added
+
+- **Voice dictation punctuation** - Voice input now adds proper punctuation, capitalization, and grammar before sending text to the terminal. Uses Claude Haiku via the configured Anthropic API key for accurate cleanup. Falls back to basic rule-based capitalization and period insertion when no API key is configured.
+
 ## [0.9.12] - 2026-04-01
 
 ### Fixed

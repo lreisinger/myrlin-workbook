@@ -9568,11 +9568,14 @@ class CWMApp {
         const text = accumulatedTranscript.trim();
         if (text) {
           const currentTp = this.terminalPanes[slotIdx];
-          if (currentTp && currentTp.ws && currentTp.ws.readyState === WebSocket.OPEN) {
-            currentTp.ws.send(JSON.stringify({ type: 'input', data: text + '\n' }));
-            this.showToast('Voice input sent', 'success');
-          } else {
+          if (!currentTp || !currentTp.ws || currentTp.ws.readyState !== WebSocket.OPEN) {
             this.showToast('Terminal not connected, voice input discarded', 'warning');
+          } else {
+            // Clean up punctuation and grammar before sending
+            this._punctuateVoiceText(text).then(cleaned => {
+              currentTp.ws.send(JSON.stringify({ type: 'input', data: cleaned + '\n' }));
+              this.showToast('Voice input sent', 'success');
+            });
           }
         }
       } else {
@@ -9631,6 +9634,31 @@ class CWMApp {
         delete this._voiceRecognitions[slotIdx];
       }
     }
+  }
+
+  /**
+   * Add punctuation and grammar to raw voice transcription text.
+   * Tries the server-side AI punctuation endpoint (uses Anthropic API key if configured).
+   * Falls back to basic rule-based cleanup if the API is unavailable.
+   * @param {string} rawText - Raw speech-to-text output without punctuation
+   * @returns {Promise<string>} Cleaned text with punctuation and capitalization
+   */
+  async _punctuateVoiceText(rawText) {
+    if (!rawText || !rawText.trim()) return rawText;
+
+    // Try AI-powered punctuation via the server
+    try {
+      const data = await this.api('POST', '/api/ai/punctuate', { text: rawText });
+      if (data && data.text) return data.text;
+    } catch (_) {
+      // API unavailable or no key configured, fall through to rule-based
+    }
+
+    // Rule-based fallback: capitalize first letter, add period at end
+    let text = rawText.trim();
+    text = text.charAt(0).toUpperCase() + text.slice(1);
+    if (!/[.!?]$/.test(text)) text += '.';
+    return text;
   }
 
   /**

@@ -2364,6 +2364,57 @@ app.put('/api/keys/anthropic', requireAuth, (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────
+//  AI-POWERED VOICE PUNCTUATION
+// ──────────────────────────────────────────────────────────
+
+/**
+ * POST /api/ai/punctuate
+ * Adds punctuation, capitalization, and grammar to raw voice dictation text.
+ * Uses Claude Haiku for fast, low-cost cleanup. Returns 400 if no API key.
+ * Body: { text: "raw voice text without punctuation" }
+ * Returns: { text: "Cleaned text with proper punctuation." }
+ */
+app.post('/api/ai/punctuate', requireAuth, async (req, res) => {
+  const { text } = req.body || {};
+  if (!text || typeof text !== 'string' || text.trim().length < 2) {
+    return res.status(400).json({ error: 'Text is required (at least 2 characters)' });
+  }
+
+  const store = getStore();
+  const apiKey = (store.getState().settings || {}).anthropicApiKey || '';
+  if (!apiKey) {
+    return res.status(400).json({ error: 'No Anthropic API key configured' });
+  }
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1024,
+        system: `You are a punctuation and grammar fixer for voice dictation. Given raw speech-to-text output, add proper punctuation (periods, commas, question marks, exclamation points), capitalization, and fix obvious grammar issues. Keep the original meaning and wording intact. Do NOT add, remove, or rephrase words. Do NOT add quotes around the text. Return ONLY the corrected text, nothing else.`,
+        messages: [{ role: 'user', content: text.trim() }],
+      }),
+    });
+
+    if (!response.ok) {
+      return res.status(502).json({ error: `Claude API returned ${response.status}` });
+    }
+
+    const data = await response.json();
+    const cleaned = (data.content && data.content[0] && data.content[0].text) || text;
+    return res.json({ text: cleaned.trim() });
+  } catch (err) {
+    return res.status(502).json({ error: 'Failed to reach Claude API: ' + err.message });
+  }
+});
+
+// ──────────────────────────────────────────────────────────
 //  AI-POWERED SESSION FINDER
 // ──────────────────────────────────────────────────────────
 
