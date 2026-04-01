@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.11] - 2026-04-01
+
+### Fixed
+
+- **App freezes during cost calculation** - All cost endpoints (batch, dashboard, quota overview, workspace cost, session export) were calling `calculateSessionCost()` synchronously, which reads and parses entire JSONL files on the main event loop. With large session files, this blocked all HTTP, SSE, and WebSocket traffic for several seconds, freezing the entire UI. Now uses the existing worker thread (`cost-worker.js`) via `calculateSessionCostAsync()` for all cache-miss calculations, keeping the event loop free. Cache hits (the common case) still return instantly with zero I/O.
+
 ## [0.9.10] - 2026-04-01
 
 ### Added

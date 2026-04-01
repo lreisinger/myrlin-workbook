@@ -2931,11 +2931,12 @@ app.get('/api/sessions/:id/cost', requireAuth, (req, res) => {
  * Each entry includes sessionId, totalCost, and lastActive for sidebar badge rendering.
  * Uses the same cache as per-session cost endpoints.
  */
-app.get('/api/cost/batch', requireAuth, (req, res) => {
+app.get('/api/cost/batch', requireAuth, async (req, res) => {
   try {
     const store = getStore();
     const allWorkspaces = store.getAllWorkspacesList();
     const costs = {};
+    const pending = []; // Async calculations to run off the main thread
 
     for (const workspace of allWorkspaces) {
       const sessions = store.getWorkspaceSessions(workspace.id);
@@ -2951,24 +2952,45 @@ app.get('/api/cost/batch', requireAuth, (req, res) => {
           const mtimeMs = stat.mtimeMs;
           const cached = _costCache.get(resumeSessionId);
           const now = Date.now();
-          let costData;
 
           if (cached && cached.mtimeMs === mtimeMs && (now - cached.timestamp) < COST_CACHE_TTL) {
-            costData = cached.result;
+            // Cache hit: resolve immediately, no event loop blocking
+            costs[session.id] = {
+              cost: cached.result.cost ? cached.result.cost.total : 0,
+              lastActive: cached.result.lastMessage || session.lastActive || null,
+            };
           } else {
-            costData = calculateSessionCost(jsonlPath);
-            const result = { sessionId: session.id, resumeSessionId, ...costData };
-            _costCache.set(resumeSessionId, { mtimeMs, timestamp: now, result });
-            costData = result;
+            // Cache miss: queue async worker calculation
+            const sid = session.id;
+            const lastActive = session.lastActive;
+            pending.push(
+              calculateSessionCostAsync(jsonlPath).then(costData => {
+                const result = { sessionId: sid, resumeSessionId, ...costData };
+                _costCache.set(resumeSessionId, { mtimeMs, timestamp: now, result });
+                costs[sid] = {
+                  cost: costData.cost ? costData.cost.total : 0,
+                  lastActive: costData.lastMessage || lastActive || null,
+                };
+              }).catch(() => {
+                // Fallback: sync calculation (only for this single session)
+                try {
+                  const costData = calculateSessionCost(jsonlPath);
+                  const result = { sessionId: sid, resumeSessionId, ...costData };
+                  _costCache.set(resumeSessionId, { mtimeMs, timestamp: now, result });
+                  costs[sid] = {
+                    cost: costData.cost ? costData.cost.total : 0,
+                    lastActive: costData.lastMessage || lastActive || null,
+                  };
+                } catch (_) {}
+              })
+            );
           }
-
-          costs[session.id] = {
-            cost: costData.cost ? costData.cost.total : 0,
-            lastActive: costData.lastMessage || session.lastActive || null,
-          };
         } catch (_) {}
       }
     }
+
+    // Wait for all async calculations to complete
+    if (pending.length > 0) await Promise.all(pending);
 
     return res.json({ costs });
   } catch (err) {
@@ -2982,11 +3004,12 @@ app.get('/api/cost/batch', requireAuth, (req, res) => {
  * Helps identify sessions that need compaction or are consuming the most tokens.
  * Sorted by latestInputTokens descending (heaviest first).
  */
-app.get('/api/quota-overview', requireAuth, (req, res) => {
+app.get('/api/quota-overview', requireAuth, async (req, res) => {
   try {
     const store = getStore();
     const allWorkspaces = store.getAllWorkspacesList();
-    const sessionQuotas = [];
+    const entries = []; // { session, workspace, costData }
+    const pending = [];
 
     for (const workspace of allWorkspaces) {
       const sessions = store.getWorkspaceSessions(workspace.id);
@@ -2999,50 +3022,58 @@ app.get('/api/quota-overview', requireAuth, (req, res) => {
 
         try {
           const stat = fs.statSync(jsonlPath);
-          if (stat.size >= 500 * 1024 * 1024) continue; // Skip >500MB files
+          if (stat.size >= 500 * 1024 * 1024) continue;
           const mtimeMs = stat.mtimeMs;
           const cached = _costCache.get(resumeSessionId);
           const now = Date.now();
-          let costData;
 
           if (cached && cached.mtimeMs === mtimeMs && (now - cached.timestamp) < COST_CACHE_TTL) {
-            costData = cached.result;
+            entries.push({ session, workspace, costData: cached.result, stat });
           } else {
-            costData = calculateSessionCost(jsonlPath);
-            const result = { sessionId: session.id, resumeSessionId, ...costData };
-            _costCache.set(resumeSessionId, { mtimeMs, timestamp: now, result });
+            const idx = entries.length;
+            entries.push({ session, workspace, costData: null, stat });
+            pending.push(
+              calculateSessionCostAsync(jsonlPath).catch(() => calculateSessionCost(jsonlPath))
+                .then(costData => {
+                  const result = { sessionId: session.id, resumeSessionId, ...costData };
+                  _costCache.set(resumeSessionId, { mtimeMs, timestamp: now, result });
+                  entries[idx].costData = result;
+                }).catch(() => {})
+            );
           }
 
-          const latestInput = costData.quota ? costData.quota.latestInputTokens : 0;
-          const peakInput = costData.quota ? costData.quota.peakInputTokens : 0;
-          const totalCost = costData.cost ? costData.cost.total : 0;
-          const totalTokens = costData.tokens ? costData.tokens.total : 0;
-          const messages = costData.messageCount || 0;
-
-          // Heaviness score: context usage as percentage of 200K window
-          const contextPct = Math.round((latestInput / 200000) * 100);
-          // Compaction urgency: >80% = critical, >50% = warning, else OK
-          const urgency = contextPct >= 80 ? 'critical' : contextPct >= 50 ? 'warning' : 'ok';
-
-          sessionQuotas.push({
-            sessionId: session.id,
-            sessionName: session.name || session.id.substring(0, 12),
-            workspaceId: workspace.id,
-            workspaceName: workspace.name,
-            latestInputTokens: latestInput,
-            peakInputTokens: peakInput,
-            contextPct,
-            urgency,
-            totalTokens,
-            totalCost,
-            messageCount: messages,
-            fileSize: stat.size,
-            lastMessage: costData.lastMessage || null,
-          });
-        } catch (_) {
-          // Skip sessions whose JSONL files can't be read
-        }
+        } catch (_) {}
       }
+    }
+
+    if (pending.length > 0) await Promise.all(pending);
+
+    const sessionQuotas = [];
+    for (const { session, workspace, costData, stat } of entries) {
+      if (!costData) continue;
+      const latestInput = costData.quota ? costData.quota.latestInputTokens : 0;
+      const peakInput = costData.quota ? costData.quota.peakInputTokens : 0;
+      const totalCost = costData.cost ? costData.cost.total : 0;
+      const totalTokens = costData.tokens ? costData.tokens.total : 0;
+      const messages = costData.messageCount || 0;
+      const contextPct = Math.round((latestInput / 200000) * 100);
+      const urgency = contextPct >= 80 ? 'critical' : contextPct >= 50 ? 'warning' : 'ok';
+
+      sessionQuotas.push({
+        sessionId: session.id,
+        sessionName: session.name || session.id.substring(0, 12),
+        workspaceId: workspace.id,
+        workspaceName: workspace.name,
+        latestInputTokens: latestInput,
+        peakInputTokens: peakInput,
+        contextPct,
+        urgency,
+        totalTokens,
+        totalCost,
+        messageCount: messages,
+        fileSize: stat.size,
+        lastMessage: costData.lastMessage || null,
+      });
     }
 
     // Sort by context window size descending (heaviest first)
@@ -3074,7 +3105,7 @@ app.get('/api/quota-overview', requireAuth, (req, res) => {
  * GET /api/workspaces/:id/cost
  * Aggregates token usage and cost across all sessions in a workspace.
  */
-app.get('/api/workspaces/:id/cost', requireAuth, (req, res) => {
+app.get('/api/workspaces/:id/cost', requireAuth, async (req, res) => {
   const store = getStore();
   const workspace = store.getWorkspace(req.params.id);
 
@@ -3094,6 +3125,10 @@ app.get('/api/workspaces/:id/cost', requireAuth, (req, res) => {
     sessionsWithData: 0,
   };
 
+  // Resolve cost data for all sessions (async for cache misses)
+  const costResults = [];
+  const pending = [];
+
   for (const session of sessions) {
     const resumeSessionId = session.resumeSessionId;
     if (!resumeSessionId) continue;
@@ -3102,44 +3137,57 @@ app.get('/api/workspaces/:id/cost', requireAuth, (req, res) => {
     if (!jsonlPath) continue;
 
     try {
-      // Check cache for individual session cost
       const stat = fs.statSync(jsonlPath);
       const mtimeMs = stat.mtimeMs;
       const cached = _costCache.get(resumeSessionId);
       const now = Date.now();
-      let costData;
 
       if (cached && cached.mtimeMs === mtimeMs && (now - cached.timestamp) < COST_CACHE_TTL) {
-        costData = cached.result;
+        costResults.push(cached.result);
       } else {
-        costData = calculateSessionCost(jsonlPath);
-        const result = { sessionId: session.id, resumeSessionId, ...costData };
-        _costCache.set(resumeSessionId, { mtimeMs, timestamp: now, result });
+        const idx = costResults.length;
+        costResults.push(null);
+        pending.push(
+          calculateSessionCostAsync(jsonlPath).catch(() => calculateSessionCost(jsonlPath))
+            .then(costData => {
+              const result = { sessionId: session.id, resumeSessionId, ...costData };
+              _costCache.set(resumeSessionId, { mtimeMs, timestamp: now, result });
+              costResults[idx] = result;
+            }).catch(() => {})
+        );
       }
+    } catch (_) {}
+  }
 
-      totals.tokens.input += costData.tokens.input;
-      totals.tokens.output += costData.tokens.output;
-      totals.tokens.cacheWrite += costData.tokens.cacheWrite;
-      totals.tokens.cacheRead += costData.tokens.cacheRead;
-      totals.tokens.total += costData.tokens.total;
+  if (pending.length > 0) await Promise.all(pending);
 
-      totals.cost.input += costData.cost.input;
-      totals.cost.output += costData.cost.output;
-      totals.cost.cacheWrite += costData.cost.cacheWrite;
-      totals.cost.cacheRead += costData.cost.cacheRead;
-      totals.cost.total += costData.cost.total;
+  for (const costData of costResults) {
+    if (!costData || !costData.tokens || !costData.cost) continue;
 
-      totals.messageCount += costData.messageCount;
-      totals.sessionsWithData++;
+    totals.tokens.input += costData.tokens.input;
+    totals.tokens.output += costData.tokens.output;
+    totals.tokens.cacheWrite += costData.tokens.cacheWrite;
+    totals.tokens.cacheRead += costData.tokens.cacheRead;
+    totals.tokens.total += costData.tokens.total;
 
-      if (costData.firstMessage && (!totals.firstMessage || costData.firstMessage < totals.firstMessage)) {
-        totals.firstMessage = costData.firstMessage;
-      }
-      if (costData.lastMessage && (!totals.lastMessage || costData.lastMessage > totals.lastMessage)) {
-        totals.lastMessage = costData.lastMessage;
-      }
+    totals.cost.input += costData.cost.input;
+    totals.cost.output += costData.cost.output;
+    totals.cost.cacheWrite += costData.cost.cacheWrite;
+    totals.cost.cacheRead += costData.cost.cacheRead;
+    totals.cost.total += costData.cost.total;
 
-      // Merge model breakdowns
+    totals.messageCount += costData.messageCount;
+    totals.sessionsWithData++;
+
+    if (costData.firstMessage && (!totals.firstMessage || costData.firstMessage < totals.firstMessage)) {
+      totals.firstMessage = costData.firstMessage;
+    }
+    if (costData.lastMessage && (!totals.lastMessage || costData.lastMessage > totals.lastMessage)) {
+      totals.lastMessage = costData.lastMessage;
+    }
+
+    // Merge model breakdowns
+    if (costData.modelBreakdown) {
       for (const [model, breakdown] of Object.entries(costData.modelBreakdown)) {
         if (!totals.modelBreakdown[model]) {
           totals.modelBreakdown[model] = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0 };
@@ -3150,8 +3198,6 @@ app.get('/api/workspaces/:id/cost', requireAuth, (req, res) => {
         totals.modelBreakdown[model].cacheRead += breakdown.cacheRead;
         totals.modelBreakdown[model].cost += breakdown.cost;
       }
-    } catch (_) {
-      // Skip sessions whose JSONL files can't be read
     }
   }
 
@@ -3274,7 +3320,7 @@ app.get('/api/workspaces/:id/analytics', requireAuth, (req, res) => {
  * breakdowns, and per-session costs. Used by the Costs tab.
  * @param {string} [period=week] - One of: day, week, month, all
  */
-app.get('/api/cost/dashboard', requireAuth, (req, res) => {
+app.get('/api/cost/dashboard', requireAuth, async (req, res) => {
   try {
     const period = req.query.period || 'week';
     const store = getStore();
@@ -3291,138 +3337,142 @@ app.get('/api/cost/dashboard', requireAuth, (req, res) => {
     const cutoffMs = periodMs[period] || periodMs.week;
     const cutoffDate = cutoffMs === Infinity ? null : new Date(now - cutoffMs).toISOString();
 
-    // Collect cost data from all sessions across all workspaces
-    const allSessionCosts = [];        // Per-session cost records
-    const dailyCosts = {};             // date string -> { cost, tokens }
-    const modelAgg = {};               // model -> { cost, tokens }
-    const workspaceAgg = {};           // workspaceId -> { name, cost, sessionCount }
-    let totalCost = 0;
-    let totalTokens = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };
-    let totalMessages = 0;
-    let periodCost = 0;
+    // Phase 1: resolve cost data for all sessions (async for cache misses)
+    const sessionEntries = []; // { session, workspace, costData }
+    const pending = [];
 
     for (const workspace of allWorkspaces) {
       const sessions = store.getWorkspaceSessions(workspace.id);
-      if (!workspaceAgg[workspace.id]) {
-        workspaceAgg[workspace.id] = { id: workspace.id, name: workspace.name, cost: 0, sessionCount: 0 };
-      }
-
       for (const session of sessions) {
         const resumeSessionId = session.resumeSessionId;
         if (!resumeSessionId) continue;
-
         const jsonlPath = findJsonlFile(resumeSessionId);
         if (!jsonlPath) continue;
 
         try {
           const stat = fs.statSync(jsonlPath);
-          if (stat.size >= 500 * 1024 * 1024) continue; // Skip >500MB files
-
-          // Check cache
+          if (stat.size >= 500 * 1024 * 1024) continue;
           const mtimeMs = stat.mtimeMs;
           const cached = _costCache.get(resumeSessionId);
           const cacheNow = Date.now();
-          let costData;
 
           if (cached && cached.mtimeMs === mtimeMs && (cacheNow - cached.timestamp) < COST_CACHE_TTL) {
-            costData = cached.result;
+            sessionEntries.push({ session, workspace, costData: cached.result });
           } else {
-            costData = calculateSessionCost(jsonlPath);
-            const result = { sessionId: session.id, resumeSessionId, ...costData };
-            _costCache.set(resumeSessionId, { mtimeMs, timestamp: cacheNow, result });
+            // Queue async calculation and push a placeholder
+            const idx = sessionEntries.length;
+            sessionEntries.push({ session, workspace, costData: null });
+            pending.push(
+              calculateSessionCostAsync(jsonlPath).catch(() => {
+                // Fallback to sync if worker fails
+                return calculateSessionCost(jsonlPath);
+              }).then(costData => {
+                const result = { sessionId: session.id, resumeSessionId, ...costData };
+                _costCache.set(resumeSessionId, { mtimeMs, timestamp: cacheNow, result });
+                sessionEntries[idx].costData = result;
+              }).catch(() => {})
+            );
           }
+        } catch (_) {}
+      }
+    }
 
-          const sessionCost = costData.cost ? costData.cost.total : 0;
-          totalCost += sessionCost;
-          totalMessages += costData.messageCount || 0;
+    // Wait for all async calculations off the main thread
+    if (pending.length > 0) await Promise.all(pending);
 
-          if (costData.tokens) {
-            totalTokens.input += costData.tokens.input || 0;
-            totalTokens.output += costData.tokens.output || 0;
-            totalTokens.cacheWrite += costData.tokens.cacheWrite || 0;
-            totalTokens.cacheRead += costData.tokens.cacheRead || 0;
+    // Phase 2: aggregate all cost data (pure arithmetic, no I/O)
+    const allSessionCosts = [];
+    const dailyCosts = {};
+    const modelAgg = {};
+    const workspaceAgg = {};
+    let totalCost = 0;
+    let totalTokens = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };
+    let totalMessages = 0;
+    let periodCost = 0;
+
+    for (const { session, workspace, costData } of sessionEntries) {
+      if (!costData) continue;
+
+      if (!workspaceAgg[workspace.id]) {
+        workspaceAgg[workspace.id] = { id: workspace.id, name: workspace.name, cost: 0, sessionCount: 0 };
+      }
+
+      const sessionCost = costData.cost ? costData.cost.total : 0;
+      totalCost += sessionCost;
+      totalMessages += costData.messageCount || 0;
+
+      if (costData.tokens) {
+        totalTokens.input += costData.tokens.input || 0;
+        totalTokens.output += costData.tokens.output || 0;
+        totalTokens.cacheWrite += costData.tokens.cacheWrite || 0;
+        totalTokens.cacheRead += costData.tokens.cacheRead || 0;
+      }
+
+      workspaceAgg[workspace.id].cost += sessionCost;
+      workspaceAgg[workspace.id].sessionCount++;
+
+      if (costData.modelBreakdown) {
+        for (const [model, breakdown] of Object.entries(costData.modelBreakdown)) {
+          if (!modelAgg[model]) {
+            modelAgg[model] = { model, cost: 0, tokens: 0 };
           }
-
-          // Workspace aggregation
-          workspaceAgg[workspace.id].cost += sessionCost;
-          workspaceAgg[workspace.id].sessionCount++;
-
-          // Model aggregation
-          if (costData.modelBreakdown) {
-            for (const [model, breakdown] of Object.entries(costData.modelBreakdown)) {
-              if (!modelAgg[model]) {
-                modelAgg[model] = { model, cost: 0, tokens: 0 };
-              }
-              modelAgg[model].cost += breakdown.cost || 0;
-              modelAgg[model].tokens += (breakdown.input || 0) + (breakdown.output || 0) +
-                (breakdown.cacheWrite || 0) + (breakdown.cacheRead || 0);
-            }
-          }
-
-          // Daily timeline from contextSamples timestamps
-          const samples = costData.quota ? costData.quota.contextGrowth : [];
-          if (samples && samples.length > 0) {
-            // Group messages by day, calculate cost per message
-            const perMsgCost = costData.messageCount > 0
-              ? sessionCost / costData.messageCount : 0;
-
-            for (const sample of samples) {
-              if (!sample.ts) continue;
-              const dayKey = sample.ts.substring(0, 10); // YYYY-MM-DD
-              if (!dailyCosts[dayKey]) {
-                dailyCosts[dayKey] = { date: dayKey, cost: 0, tokens: 0, messages: 0 };
-              }
-              dailyCosts[dayKey].cost += perMsgCost;
-              dailyCosts[dayKey].tokens += sample.tokens || 0;
-              dailyCosts[dayKey].messages++;
-            }
-          }
-
-          // Apportion session cost to the period using per-message cost and
-          // message timestamps, not the full session cost. This ensures "Last 24h"
-          // only counts cost from messages sent in the last 24 hours, not the
-          // entire lifetime of any session that was recently active.
-          if (!cutoffDate) {
-            periodCost += sessionCost;
-          } else if (samples && samples.length > 0 && costData.messageCount > 0) {
-            const perMsgCost = sessionCost / costData.messageCount;
-            let periodMessages = 0;
-            for (const sample of samples) {
-              if (sample.ts && sample.ts >= cutoffDate) periodMessages++;
-            }
-            periodCost += perMsgCost * periodMessages;
-          } else if (costData.lastMessage && costData.lastMessage >= cutoffDate) {
-            // Fallback: no timestamp samples available, use full cost
-            periodCost += sessionCost;
-          }
-
-          // Determine primary model for the session
-          let primaryModel = 'unknown';
-          let maxModelCost = 0;
-          if (costData.modelBreakdown) {
-            for (const [model, breakdown] of Object.entries(costData.modelBreakdown)) {
-              if (breakdown.cost > maxModelCost) {
-                maxModelCost = breakdown.cost;
-                primaryModel = model;
-              }
-            }
-          }
-
-          allSessionCosts.push({
-            id: session.id,
-            name: session.name || session.id.substring(0, 12),
-            workspaceId: workspace.id,
-            workspaceName: workspace.name,
-            cost: Math.round(sessionCost * 1000) / 1000,
-            messageCount: costData.messageCount || 0,
-            model: primaryModel,
-            lastActive: costData.lastMessage || session.lastActive || null,
-            firstMessage: costData.firstMessage || null,
-          });
-        } catch (_) {
-          // Skip sessions with unreadable JSONL
+          modelAgg[model].cost += breakdown.cost || 0;
+          modelAgg[model].tokens += (breakdown.input || 0) + (breakdown.output || 0) +
+            (breakdown.cacheWrite || 0) + (breakdown.cacheRead || 0);
         }
       }
+
+      const samples = costData.quota ? costData.quota.contextGrowth : [];
+      if (samples && samples.length > 0) {
+        const perMsgCost = costData.messageCount > 0
+          ? sessionCost / costData.messageCount : 0;
+        for (const sample of samples) {
+          if (!sample.ts) continue;
+          const dayKey = sample.ts.substring(0, 10);
+          if (!dailyCosts[dayKey]) {
+            dailyCosts[dayKey] = { date: dayKey, cost: 0, tokens: 0, messages: 0 };
+          }
+          dailyCosts[dayKey].cost += perMsgCost;
+          dailyCosts[dayKey].tokens += sample.tokens || 0;
+          dailyCosts[dayKey].messages++;
+        }
+      }
+
+      if (!cutoffDate) {
+        periodCost += sessionCost;
+      } else if (samples && samples.length > 0 && costData.messageCount > 0) {
+        const perMsgCost = sessionCost / costData.messageCount;
+        let periodMessages = 0;
+        for (const sample of samples) {
+          if (sample.ts && sample.ts >= cutoffDate) periodMessages++;
+        }
+        periodCost += perMsgCost * periodMessages;
+      } else if (costData.lastMessage && costData.lastMessage >= cutoffDate) {
+        periodCost += sessionCost;
+      }
+
+      let primaryModel = 'unknown';
+      let maxModelCost = 0;
+      if (costData.modelBreakdown) {
+        for (const [model, breakdown] of Object.entries(costData.modelBreakdown)) {
+          if (breakdown.cost > maxModelCost) {
+            maxModelCost = breakdown.cost;
+            primaryModel = model;
+          }
+        }
+      }
+
+      allSessionCosts.push({
+        id: session.id,
+        name: session.name || session.id.substring(0, 12),
+        workspaceId: workspace.id,
+        workspaceName: workspace.name,
+        cost: Math.round(sessionCost * 1000) / 1000,
+        messageCount: costData.messageCount || 0,
+        model: primaryModel,
+        lastActive: costData.lastMessage || session.lastActive || null,
+        firstMessage: costData.firstMessage || null,
+      });
     }
 
     // Build timeline sorted by date, filtered to period
@@ -3590,7 +3640,7 @@ function extractFilePaths(text) {
  * and token usage - ready to paste into a new session.
  * Protected by auth.
  */
-app.get('/api/sessions/:id/export-context', requireAuth, (req, res) => {
+app.get('/api/sessions/:id/export-context', requireAuth, async (req, res) => {
   const store = getStore();
   const session = store.getSession(req.params.id);
 
@@ -3666,12 +3716,10 @@ app.get('/api/sessions/:id/export-context', requireAuth, (req, res) => {
       }
     }
 
-    // ── Count total messages by reading full file line-by-line ──
-    // Use the cost calculation helper which already reads the full file
-    // and gives us token usage, cost, and message count
+    // ── Count total messages via cost calculation (off main thread) ──
     let costData;
     try {
-      costData = calculateSessionCost(jsonlPath);
+      costData = await calculateSessionCostAsync(jsonlPath).catch(() => calculateSessionCost(jsonlPath));
     } catch (_) {
       costData = {
         tokens: { input: 0, output: 0, total: 0 },
