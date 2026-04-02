@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.14] - 2026-04-02
+
+### Fixed
+
+- **Input lag from sidebar re-renders during cost updates** - When batch cost data arrived, the entire sidebar was rebuilt via `renderWorkspaces()` (every workspace, session, badge, and event handler). With 20+ sessions, this DOM rebuild froze the browser for hundreds of milliseconds. Now patches cost badge text in-place without touching the rest of the DOM.
+
 ## [0.9.13] - 2026-04-01
 
 ### Added

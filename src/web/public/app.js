@@ -14848,19 +14848,53 @@ class CWMApp {
       this._costBatchInFlight = false;
       this._costBatchTs = Date.now();
       if (data && data.costs) {
-        let changed = false;
         for (const [sid, entry] of Object.entries(data.costs)) {
-          const prev = this._costCache[sid];
-          if (!prev || prev.cost !== entry.cost) changed = true;
           this._costCache[sid] = { cost: entry.cost, ts: Date.now() };
         }
-        // Only re-render if any cost value actually changed
-        if (changed) this.renderWorkspaces();
+        // Patch cost badges in-place instead of full renderWorkspaces() rebuild.
+        // Full re-renders freeze the UI for hundreds of ms with many sessions.
+        this._patchCostBadges(data.costs);
       }
     }).catch(() => {
       this._costBatchInFlight = false;
       this._costBatchTs = Date.now();
     });
+  }
+
+  /**
+   * Patch cost badge text in the sidebar DOM without a full renderWorkspaces() rebuild.
+   * Finds existing cost badges by session ID and updates their text, or inserts
+   * a new badge if one doesn't exist yet. Avoids the multi-hundred-ms DOM rebuild
+   * that was causing input freezes.
+   * @param {Object} costs - Map of sessionId -> { cost, lastActive }
+   */
+  _patchCostBadges(costs) {
+    const list = this.els.workspaceList;
+    if (!list) return;
+
+    for (const [sid, entry] of Object.entries(costs)) {
+      if (!entry.cost && entry.cost !== 0) continue;
+      const costText = '$' + Number(entry.cost).toFixed(2);
+
+      // Find the session element in the sidebar
+      const sessionEl = list.querySelector(`[data-session-id="${sid}"]`);
+      if (!sessionEl) continue;
+
+      // Try to find an existing cost badge
+      let badge = sessionEl.querySelector('.session-badge-cost');
+      if (badge) {
+        if (badge.textContent !== costText) badge.textContent = costText;
+      } else if (entry.cost > 0) {
+        // Insert a new cost badge into the meta row
+        const metaRow = sessionEl.querySelector('.ws-session-meta-row');
+        if (metaRow) {
+          badge = document.createElement('span');
+          badge.className = 'session-badge session-badge-cost';
+          badge.textContent = costText;
+          metaRow.prepend(badge);
+        }
+      }
+    }
   }
 
   async checkForConflicts() {
