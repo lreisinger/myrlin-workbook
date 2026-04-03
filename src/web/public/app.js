@@ -4706,6 +4706,20 @@ class CWMApp {
     // Trigger data load for the active tab
     if (name === 'worktree') this.renderTasksView();
     if (name === 'td') this.renderTasksTdPanel();
+    if (name === 'git') {
+      this.renderTasksGitPanel();
+      // Start auto-refresh every 10 seconds while git tab is active
+      if (this._gitRefreshTimer) clearInterval(this._gitRefreshTimer);
+      this._gitRefreshTimer = setInterval(() => {
+        if (this._activeTasksTab === 'git') this.renderTasksGitPanel();
+      }, 10000);
+    } else {
+      // Clear git refresh timer when switching away from git tab
+      if (this._gitRefreshTimer) {
+        clearInterval(this._gitRefreshTimer);
+        this._gitRefreshTimer = null;
+      }
+    }
   }
 
   async renderTasksTdPanel() {
@@ -4796,6 +4810,274 @@ class CWMApp {
       }
     }
   }
+
+  /**
+   * Render the Git tab panel.
+   * Shows a two-pane layout: left pane has branch indicator, file status list,
+   * and commit log; right pane shows diff for the selected file.
+   * Includes 10-second auto-refresh when the tab is active.
+   */
+  async renderTasksGitPanel() {
+    const panel = document.getElementById('tasks-git-panel');
+    if (!panel) return;
+
+    const ws = this.state.activeWorkspace;
+    if (!ws) {
+      panel.textContent = '';
+      const pl = document.createElement('div');
+      pl.className = 'tasks-placeholder';
+      pl.textContent = 'No active project selected';
+      panel.appendChild(pl);
+      return;
+    }
+
+    panel.textContent = '';
+    const loading = document.createElement('div');
+    loading.className = 'tasks-placeholder';
+    loading.textContent = 'Loading git status\u2026';
+    panel.appendChild(loading);
+
+    try {
+      const status = await this.api('GET', `/api/git/status?workspaceId=${ws.id}`);
+
+      panel.textContent = '';
+
+      const container = document.createElement('div');
+      container.className = 'git-panel-container';
+
+      const left = document.createElement('div');
+      left.className = 'git-panel-left';
+      left.id = 'git-status-list';
+
+      const right = document.createElement('div');
+      right.className = 'git-panel-right';
+      right.id = 'git-diff-viewer';
+      const diffPlaceholder = document.createElement('div');
+      diffPlaceholder.className = 'tasks-placeholder';
+      diffPlaceholder.textContent = 'Select a file to view diff';
+      right.appendChild(diffPlaceholder);
+
+      panel.appendChild(container);
+      container.appendChild(left);
+      container.appendChild(right);
+
+      // Branch indicator bar
+      const branchBar = document.createElement('div');
+      branchBar.className = 'git-branch-bar';
+      const branchIcon = document.createElement('span');
+      branchIcon.className = 'git-branch-icon';
+      branchIcon.textContent = '\u2387 ';
+      const branchName = document.createElement('span');
+      branchName.className = 'git-branch-name';
+      branchName.textContent = status.branch || 'unknown';
+      branchBar.appendChild(branchIcon);
+      branchBar.appendChild(branchName);
+      left.appendChild(branchBar);
+
+      if (status.isClean) {
+        const clean = document.createElement('div');
+        clean.className = 'tasks-placeholder';
+        clean.textContent = 'Working tree clean';
+        left.appendChild(clean);
+      } else {
+        // Group files by their change state
+        const groups = [
+          { label: 'Staged', files: status.staged || [], staged: true },
+          { label: 'Modified', files: status.modified || [], staged: false },
+          { label: 'Untracked', files: status.notAdded || [], staged: false },
+          { label: 'Deleted', files: status.deleted || [], staged: false },
+        ];
+
+        for (const group of groups) {
+          if (!group.files.length) continue;
+
+          const header = document.createElement('div');
+          header.className = 'git-group-header';
+          header.textContent = `${group.label} (${group.files.length})`;
+          left.appendChild(header);
+
+          for (const fileObj of group.files) {
+            const filename = typeof fileObj === 'string' ? fileObj : fileObj.file;
+            const row = document.createElement('div');
+            row.className = 'git-file-row';
+            row.dataset.file = filename;
+            row.dataset.staged = group.staged;
+
+            const stateEl = document.createElement('span');
+            stateEl.className = `git-file-state git-state-${group.label.toLowerCase()}`;
+            stateEl.textContent = group.label[0]; // S, M, U, D
+
+            const nameEl = document.createElement('span');
+            nameEl.className = 'git-file-name';
+            nameEl.textContent = filename;
+
+            row.appendChild(stateEl);
+            row.appendChild(nameEl);
+
+            row.addEventListener('click', () => {
+              left.querySelectorAll('.git-file-row').forEach(r => r.classList.remove('active'));
+              row.classList.add('active');
+              this._loadGitDiff(right, ws.id, filename, group.staged);
+            });
+
+            left.appendChild(row);
+          }
+        }
+      }
+
+      // Commit log section appended below file status
+      await this._renderGitLog(left, ws.id);
+
+    } catch (err) {
+      panel.textContent = '';
+      const errEl = document.createElement('div');
+      errEl.className = 'tasks-placeholder tasks-placeholder--error';
+      errEl.textContent = 'Failed to load git status: ' + (err.message || 'unknown error');
+      panel.appendChild(errEl);
+    }
+  },
+
+  /**
+   * Load and render the diff for a specific file into the diff viewer pane.
+   * Renders line-by-line using DOM APIs to prevent XSS from raw diff content.
+   * @param {HTMLElement} container - The right pane to render into
+   * @param {string} workspaceId - Workspace ID for the API call
+   * @param {string} file - File path to diff
+   * @param {boolean} staged - Whether to show staged vs unstaged diff
+   */
+  async _loadGitDiff(container, workspaceId, file, staged) {
+    container.textContent = '';
+    const loadingEl = document.createElement('div');
+    loadingEl.className = 'tasks-placeholder';
+    loadingEl.textContent = 'Loading diff\u2026';
+    container.appendChild(loadingEl);
+
+    try {
+      const data = await this.api('GET', `/api/git/diff?workspaceId=${workspaceId}&file=${encodeURIComponent(file)}&staged=${staged}`);
+      const diffText = data.diff || '';
+
+      if (!diffText.trim()) {
+        container.textContent = '';
+        const empty = document.createElement('div');
+        empty.className = 'tasks-placeholder';
+        empty.textContent = 'No diff available';
+        container.appendChild(empty);
+        return;
+      }
+
+      container.textContent = '';
+      const pre = document.createElement('pre');
+      pre.className = 'git-diff-viewer';
+
+      // Parse line-by-line and apply syntax coloring via class, not innerHTML
+      const lines = diffText.split('\n');
+      for (const line of lines) {
+        const span = document.createElement('span');
+        span.textContent = line + '\n';
+        if (line.startsWith('+') && !line.startsWith('+++')) {
+          span.className = 'diff-add';
+        } else if (line.startsWith('-') && !line.startsWith('---')) {
+          span.className = 'diff-del';
+        } else if (line.startsWith('@@')) {
+          span.className = 'diff-hunk';
+        } else {
+          span.className = 'diff-ctx';
+        }
+        pre.appendChild(span);
+      }
+      container.appendChild(pre);
+    } catch (err) {
+      container.textContent = '';
+      const errEl = document.createElement('div');
+      errEl.className = 'tasks-placeholder tasks-placeholder--error';
+      errEl.textContent = 'Failed to load diff: ' + (err.message || 'unknown');
+      container.appendChild(errEl);
+    }
+  },
+
+  /**
+   * Render the recent commit log section inside the left panel.
+   * Commits show hash (click to copy), message, and relative timestamp.
+   * @param {HTMLElement} container - The left pane to append the log into
+   * @param {string} workspaceId - Workspace ID for the API call
+   */
+  async _renderGitLog(container, workspaceId) {
+    const logSection = document.createElement('div');
+    logSection.className = 'git-log-section';
+
+    const logHeader = document.createElement('div');
+    logHeader.className = 'git-group-header';
+    logHeader.textContent = 'Recent Commits';
+    logSection.appendChild(logHeader);
+    container.appendChild(logSection);
+
+    try {
+      const data = await this.api('GET', `/api/git/log?workspaceId=${workspaceId}&limit=20`);
+      const commits = data.commits || [];
+
+      if (!commits.length) {
+        const empty = document.createElement('div');
+        empty.className = 'tasks-placeholder';
+        empty.textContent = 'No commits yet';
+        logSection.appendChild(empty);
+        return;
+      }
+
+      for (const commit of commits) {
+        const row = document.createElement('div');
+        row.className = 'git-commit-row';
+
+        const hash = document.createElement('span');
+        hash.className = 'git-commit-hash';
+        hash.textContent = commit.shortHash;
+        hash.title = 'Click to copy full hash';
+        hash.addEventListener('click', () => {
+          navigator.clipboard.writeText(commit.hash).catch(() => {});
+          hash.textContent = 'copied!';
+          setTimeout(() => { hash.textContent = commit.shortHash; }, 1500);
+        });
+
+        const msg = document.createElement('span');
+        msg.className = 'git-commit-msg';
+        msg.textContent = commit.message;
+
+        const meta = document.createElement('span');
+        meta.className = 'git-commit-meta';
+        meta.textContent = this._relativeTime(new Date(commit.date));
+
+        row.appendChild(hash);
+        row.appendChild(msg);
+        row.appendChild(meta);
+        logSection.appendChild(row);
+      }
+    } catch (err) {
+      const errEl = document.createElement('div');
+      errEl.className = 'tasks-placeholder tasks-placeholder--error';
+      errEl.textContent = 'Failed to load commits: ' + (err.message || 'unknown');
+      logSection.appendChild(errEl);
+    }
+  },
+
+  /**
+   * Format a Date as a human-readable relative time string.
+   * Returns values like "just now", "5m ago", "2h ago", "3d ago",
+   * or a locale date string for dates older than 30 days.
+   * @param {Date} date - The date to format
+   * @returns {string} Relative time string
+   */
+  _relativeTime(date) {
+    const now = new Date();
+    const diff = now - date;
+    const seconds = Math.floor(diff / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+    if (days > 30) return date.toLocaleDateString();
+    if (days > 0) return `${days}d ago`;
+    if (hours > 0) return `${hours}h ago`;
+    if (minutes > 0) return `${minutes}m ago`;
+    return 'just now';
+  },
 
   /** Fetch tasks and render in the active layout */
   async renderTasksView() {

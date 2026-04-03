@@ -7578,6 +7578,94 @@ app.get('/api/browse', requireAuth, (req, res) => {
   res.json({ currentPath: targetPath, parent: hasParent ? parent : null, entries });
 });
 
+// ── Git API endpoints ──────────────────────────────────────────────────────────
+
+/**
+ * GET /api/git/status
+ * Returns the current git status for a workspace's working directory.
+ * Includes branch name, staged, modified, untracked, and deleted files.
+ *
+ * @query {string} workspaceId - The workspace ID to get git status for
+ * @returns {{ branch, staged, modified, notAdded, deleted, isClean }}
+ */
+const gitManager = require('./git-manager');
+
+app.get('/api/git/status', requireAuth, async (req, res) => {
+  try {
+    const { workspaceId } = req.query;
+    const store = getStore();
+    const ws = store.getWorkspace(workspaceId);
+    if (!ws) return res.status(404).json({ error: 'Workspace not found' });
+    const status = await gitManager.getStatus(ws.workingDir);
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/git/log
+ * Returns the commit log for a workspace's working directory.
+ *
+ * @query {string} workspaceId - The workspace ID
+ * @query {number} [limit=20] - Maximum number of commits to return
+ * @returns {{ commits: Array<{ hash, shortHash, author, date, message }> }}
+ */
+app.get('/api/git/log', requireAuth, async (req, res) => {
+  try {
+    const { workspaceId, limit } = req.query;
+    const store = getStore();
+    const ws = store.getWorkspace(workspaceId);
+    if (!ws) return res.status(404).json({ error: 'Workspace not found' });
+    const log = await gitManager.getLog(ws.workingDir, limit);
+    res.json({ commits: log });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/git/diff
+ * Returns the unified diff for a specific file in a workspace.
+ *
+ * @query {string} workspaceId - The workspace ID
+ * @query {string} file - File path relative to the workspace working directory
+ * @query {string} [staged] - 'true' to show staged diff, omit for unstaged
+ * @returns {{ diff: string }}
+ */
+app.get('/api/git/diff', requireAuth, async (req, res) => {
+  try {
+    const { workspaceId, file, staged } = req.query;
+    const store = getStore();
+    const ws = store.getWorkspace(workspaceId);
+    if (!ws) return res.status(404).json({ error: 'Workspace not found' });
+    const diff = await gitManager.getDiff(ws.workingDir, file, staged === 'true');
+    res.json({ diff });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/git/branches
+ * Returns branch information for a workspace's working directory.
+ *
+ * @query {string} workspaceId - The workspace ID
+ * @returns {{ current: string, all: string[] }}
+ */
+app.get('/api/git/branches', requireAuth, async (req, res) => {
+  try {
+    const { workspaceId } = req.query;
+    const store = getStore();
+    const ws = store.getWorkspace(workspaceId);
+    if (!ws) return res.status(404).json({ error: 'Workspace not found' });
+    const branches = await gitManager.getBranches(ws.workingDir);
+    res.json(branches);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ──────────────────────────────────────────────────────────
 //  EXPRESS ERROR MIDDLEWARE
 // ──────────────────────────────────────────────────────────
