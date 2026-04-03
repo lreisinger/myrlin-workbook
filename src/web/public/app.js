@@ -1028,6 +1028,13 @@ class CWMApp {
         e.preventDefault();
         if (this.state.token && this.state.settings.enableWorktreeTasks) this.openNewTaskDialog();
       }
+      // Ctrl+S / Cmd+S - Save current file (Files tab only)
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        if (this._activeTasksTab === 'files' && this._filesEditorCurrentFile) {
+          e.preventDefault();
+          this._saveCurrentFile();
+        }
+      }
       // Escape
       if (e.key === 'Escape') {
         if (this.els.diffViewerOverlay && !this.els.diffViewerOverlay.hidden) {
@@ -4684,6 +4691,13 @@ class CWMApp {
     const strip = document.getElementById('tasks-tab-strip');
     if (!strip) return;
 
+    // Guard: prompt before leaving files tab with unsaved changes
+    if (this._activeTasksTab === 'files' && name !== 'files' && this._filesEditorDirty) {
+      const ok = window.confirm('Unsaved changes in ' + this._filesEditorCurrentFile + '. Discard?');
+      if (!ok) return;
+      this._filesEditorDirty = false;
+    }
+
     // Update tab buttons
     strip.querySelectorAll('.tasks-tab').forEach(t => {
       const active = t.dataset.tasksTab === name;
@@ -4706,6 +4720,7 @@ class CWMApp {
     // Trigger data load for the active tab
     if (name === 'worktree') this.renderTasksView();
     if (name === 'td') this.renderTasksTdPanel();
+    if (name === 'files') this.renderTasksFilesPanel();
   }
 
   async renderTasksTdPanel() {
@@ -4771,6 +4786,306 @@ class CWMApp {
       showPlaceholder('Failed to load td issues: ' + (err.message || 'unknown error'), true);
     }
   }
+
+  // ── Files Tab ─────────────────────────────────────────────────────────────
+
+  /**
+   * Render the Files tab panel for the currently active workspace.
+   * Builds a two-pane layout: file tree sidebar on left, editor pane on right.
+   * Skips re-initialization if already rendered for the same workspace.
+   */
+  async renderTasksFilesPanel() {
+    const panel = document.getElementById('tasks-files-panel');
+    if (!panel) return;
+
+    const ws = this.state.activeWorkspace;
+    if (!ws) {
+      panel.replaceChildren();
+      const placeholder = document.createElement('div');
+      placeholder.className = 'tasks-placeholder';
+      placeholder.textContent = 'No active project selected';
+      panel.appendChild(placeholder);
+      return;
+    }
+
+    // Avoid re-init if already rendered for this workspace
+    if (panel._wsId === ws.id && panel.querySelector('.files-container')) return;
+    panel._wsId = ws.id;
+
+    panel.replaceChildren();
+    const container = document.createElement('div');
+    container.className = 'files-container';
+
+    const sidebar = document.createElement('div');
+    sidebar.className = 'files-sidebar';
+    sidebar.id = 'files-tree';
+
+    const editorPane = document.createElement('div');
+    editorPane.className = 'files-editor-pane';
+    editorPane.id = 'files-editor-pane';
+    const editorPlaceholder = document.createElement('div');
+    editorPlaceholder.className = 'tasks-placeholder';
+    editorPlaceholder.textContent = 'Select a file to edit';
+    editorPane.appendChild(editorPlaceholder);
+
+    container.appendChild(sidebar);
+    container.appendChild(editorPane);
+    panel.appendChild(container);
+
+    await this._loadFileTree(sidebar, ws.id, '');
+  }
+
+  /**
+   * Load file tree entries for a subpath into a container element.
+   * Entries are sorted dirs-first, then files, each group alphabetically.
+   * @param {HTMLElement} container - Target container element
+   * @param {string} workspaceId - Active workspace ID
+   * @param {string} subpath - Relative subpath within workspace root
+   */
+  async _loadFileTree(container, workspaceId, subpath) {
+    container.replaceChildren();
+    const loadingEl = document.createElement('div');
+    loadingEl.className = 'tasks-placeholder';
+    loadingEl.textContent = 'Loading files\u2026';
+    container.appendChild(loadingEl);
+
+    try {
+      const data = await this.api('GET', `/api/files/tree?workspaceId=${encodeURIComponent(workspaceId)}&subpath=${encodeURIComponent(subpath)}`);
+      container.replaceChildren();
+
+      if (!data.entries || !data.entries.length) {
+        const empty = document.createElement('div');
+        empty.className = 'tasks-placeholder';
+        empty.textContent = 'Empty directory';
+        container.appendChild(empty);
+        return;
+      }
+
+      for (const entry of data.entries) {
+        const row = document.createElement('div');
+        row.className = 'files-tree-row files-tree-' + entry.type;
+        row.dataset.path = entry.path;
+        row.dataset.type = entry.type;
+
+        const icon = document.createElement('span');
+        icon.className = 'files-tree-icon';
+        icon.textContent = entry.type === 'dir' ? '\u25B6' : '\u2022';
+
+        const name = document.createElement('span');
+        name.className = 'files-tree-name';
+        name.textContent = entry.name;
+
+        row.appendChild(icon);
+        row.appendChild(name);
+
+        if (entry.type === 'dir') {
+          const children = document.createElement('div');
+          children.className = 'files-tree-children';
+          children.hidden = true;
+
+          row.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const expanded = !children.hidden;
+            children.hidden = expanded;
+            icon.textContent = expanded ? '\u25B6' : '\u25BC';
+            if (!children.hidden && !children._loaded) {
+              children._loaded = true;
+              await this._loadFileTree(children, workspaceId, entry.path);
+            }
+          });
+
+          container.appendChild(row);
+          container.appendChild(children);
+        } else {
+          row.addEventListener('click', () => {
+            const fileContainer = container.closest('.files-container');
+            if (fileContainer) {
+              fileContainer.querySelectorAll('.files-tree-row').forEach(r => r.classList.remove('active'));
+            }
+            row.classList.add('active');
+            this._openFileInEditor(workspaceId, entry.path);
+          });
+          container.appendChild(row);
+        }
+      }
+    } catch (err) {
+      container.replaceChildren();
+      const errEl = document.createElement('div');
+      errEl.className = 'tasks-placeholder tasks-placeholder--error';
+      errEl.textContent = 'Failed to load tree: ' + (err.message || 'unknown');
+      container.appendChild(errEl);
+    }
+  }
+
+  /**
+   * Open a file in the editor pane. Prompts to discard if editor is dirty.
+   * @param {string} workspaceId - Active workspace ID
+   * @param {string} filePath - Relative path to the file
+   */
+  async _openFileInEditor(workspaceId, filePath) {
+    const pane = document.getElementById('files-editor-pane');
+    if (!pane) return;
+
+    if (this._filesEditorDirty) {
+      const confirmed = window.confirm('Unsaved changes in ' + this._filesEditorCurrentFile + '. Discard?');
+      if (!confirmed) return;
+    }
+
+    pane.replaceChildren();
+    const loadingEl = document.createElement('div');
+    loadingEl.className = 'tasks-placeholder';
+    loadingEl.textContent = 'Loading file\u2026';
+    pane.appendChild(loadingEl);
+
+    try {
+      const data = await this.api('GET', `/api/files/content?workspaceId=${encodeURIComponent(workspaceId)}&file=${encodeURIComponent(filePath)}`);
+
+      pane.replaceChildren();
+
+      const header = document.createElement('div');
+      header.className = 'files-editor-header';
+
+      const fileNameEl = document.createElement('span');
+      fileNameEl.className = 'files-editor-filename';
+      fileNameEl.textContent = filePath;
+
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'files-save-btn';
+      saveBtn.textContent = 'Save';
+      saveBtn.disabled = true;
+      saveBtn.addEventListener('click', () => this._saveCurrentFile(workspaceId));
+
+      header.appendChild(fileNameEl);
+      header.appendChild(saveBtn);
+      pane.appendChild(header);
+
+      const editorContainer = document.createElement('div');
+      editorContainer.className = 'files-cm-container';
+      pane.appendChild(editorContainer);
+
+      this._filesEditorDirty = false;
+      this._filesEditorCurrentFile = filePath;
+      this._filesEditorWorkspaceId = workspaceId;
+      this._filesSaveBtn = saveBtn;
+      this._filesEditorFilenameEl = fileNameEl;
+
+      await this._initCodeMirror(editorContainer, data.content, data.language, saveBtn);
+
+    } catch (err) {
+      pane.replaceChildren();
+      const errEl = document.createElement('div');
+      errEl.className = 'tasks-placeholder tasks-placeholder--error';
+      errEl.textContent = 'Failed to load file: ' + (err.message || 'unknown');
+      pane.appendChild(errEl);
+    }
+  }
+
+  /**
+   * Initialize a CodeMirror 6 editor in container. Lazy-loads CM from CDN.
+   * @param {HTMLElement} container - Mount point
+   * @param {string} content - Initial document text
+   * @param {string} language - Language hint (for future syntax extension)
+   * @param {HTMLButtonElement} saveBtn - Save button to enable on change
+   */
+  async _initCodeMirror(container, content, language, saveBtn) {
+    if (!window.__cmLoaded) {
+      await this._loadCodeMirror();
+    }
+
+    const { basicSetup, EditorView, EditorState } = window.__cm;
+
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: content,
+        extensions: [
+          basicSetup,
+          EditorView.updateListener.of(update => {
+            if (update.docChanged) {
+              this._filesEditorDirty = true;
+              if (saveBtn) {
+                saveBtn.disabled = false;
+                saveBtn.classList.add('dirty');
+              }
+              if (this._filesEditorFilenameEl && this._filesEditorCurrentFile) {
+                if (!this._filesEditorFilenameEl.textContent.startsWith('\u2022 ')) {
+                  this._filesEditorFilenameEl.textContent = '\u2022 ' + this._filesEditorCurrentFile;
+                }
+              }
+            }
+          }),
+        ],
+      }),
+      parent: container,
+    });
+
+    this._filesEditorView = view;
+  }
+
+  /**
+   * Dynamically import CodeMirror 6 from esm.sh CDN, caching on window.__cm.
+   */
+  async _loadCodeMirror() {
+    const [cmPkg, statePkg] = await Promise.all([
+      import('https://esm.sh/codemirror@6?bundle'),
+      import('https://esm.sh/@codemirror/state@6?bundle'),
+    ]);
+    window.__cm = {
+      basicSetup: cmPkg.basicSetup,
+      EditorView: cmPkg.EditorView,
+      EditorState: statePkg.EditorState || cmPkg.EditorState,
+    };
+    window.__cmLoaded = true;
+  }
+
+  /**
+   * Save the current file. Shows Saving… / Saved ✓ / Save failed feedback.
+   * @param {string} [workspaceId] - Falls back to tracked _filesEditorWorkspaceId
+   */
+  async _saveCurrentFile(workspaceId) {
+    const ws = workspaceId || this._filesEditorWorkspaceId;
+    const file = this._filesEditorCurrentFile;
+    const view = this._filesEditorView;
+
+    if (!ws || !file || !view) return;
+
+    const content = view.state.doc.toString();
+
+    try {
+      if (this._filesSaveBtn) {
+        this._filesSaveBtn.disabled = true;
+        this._filesSaveBtn.textContent = 'Saving\u2026';
+      }
+
+      await this.api('POST', '/api/files/save', { workspaceId: ws, file, content });
+
+      this._filesEditorDirty = false;
+      if (this._filesSaveBtn) {
+        this._filesSaveBtn.classList.remove('dirty');
+        this._filesSaveBtn.textContent = 'Saved \u2713';
+        setTimeout(() => {
+          if (this._filesSaveBtn) {
+            this._filesSaveBtn.textContent = 'Save';
+            this._filesSaveBtn.disabled = !this._filesEditorDirty;
+          }
+        }, 1500);
+      }
+      if (this._filesEditorFilenameEl && this._filesEditorCurrentFile) {
+        this._filesEditorFilenameEl.textContent = this._filesEditorCurrentFile;
+      }
+    } catch (err) {
+      if (this._filesSaveBtn) {
+        this._filesSaveBtn.disabled = false;
+        this._filesSaveBtn.textContent = 'Save failed';
+        setTimeout(() => {
+          if (this._filesSaveBtn) this._filesSaveBtn.textContent = 'Save';
+        }, 2000);
+      }
+      console.error('Save failed:', err);
+      alert('Save failed: ' + (err.message || 'unknown error'));
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
 
   setTasksLayout(layout) {
     this._tasksLayout = layout;

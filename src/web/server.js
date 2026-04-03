@@ -7100,6 +7100,100 @@ function extractSessionName(filePath, sessionId) {
   return sessionId;
 }
 
+// ── Files API ──────────────────────────────────────────────────────────────
+const fileManager = require('./file-manager');
+
+/**
+ * Resolve the primary working directory for a workspace.
+ * Uses the most common workingDir across the workspace's sessions.
+ * Returns null if no sessions have a workingDir set.
+ *
+ * @param {Object} store - App store instance
+ * @param {string} workspaceId - Workspace ID
+ * @returns {string|null}
+ */
+function resolveWorkspaceDir(store, workspaceId) {
+  const sessions = store.getWorkspaceSessions(workspaceId);
+  if (!sessions || sessions.length === 0) return null;
+  const counts = {};
+  for (const s of sessions) {
+    if (s.workingDir) counts[s.workingDir] = (counts[s.workingDir] || 0) + 1;
+  }
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  return sorted.length > 0 ? sorted[0][0] : null;
+}
+
+/**
+ * GET /api/files/tree?workspaceId=<id>&subpath=<rel>
+ * Returns directory entries for a subpath within the workspace root.
+ * Skips .git, node_modules, and other build artifacts.
+ */
+app.get('/api/files/tree', requireAuth, async (req, res) => {
+  try {
+    const { workspaceId, subpath = '' } = req.query;
+    if (!workspaceId) return res.status(400).json({ error: 'workspaceId required' });
+    const store = getStore();
+    const ws = store.getWorkspace(workspaceId);
+    if (!ws) return res.status(404).json({ error: 'Workspace not found' });
+    const workingDir = resolveWorkspaceDir(store, workspaceId);
+    if (!workingDir) return res.status(400).json({ error: 'Workspace has no sessions with a working directory' });
+    const tree = await fileManager.getTree(workingDir, subpath);
+    res.json(tree);
+  } catch (err) {
+    const status = err.message.includes('traversal') ? 403 : 500;
+    res.status(status).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/files/content?workspaceId=<id>&file=<rel>
+ * Returns file content as text with a CodeMirror language hint.
+ * Rejects files larger than 1MB.
+ */
+app.get('/api/files/content', requireAuth, async (req, res) => {
+  try {
+    const { workspaceId, file } = req.query;
+    if (!workspaceId) return res.status(400).json({ error: 'workspaceId required' });
+    if (!file) return res.status(400).json({ error: 'file param required' });
+    const store = getStore();
+    const ws = store.getWorkspace(workspaceId);
+    if (!ws) return res.status(404).json({ error: 'Workspace not found' });
+    const workingDir = resolveWorkspaceDir(store, workspaceId);
+    if (!workingDir) return res.status(400).json({ error: 'Workspace has no sessions with a working directory' });
+    const result = await fileManager.getContent(workingDir, file);
+    res.json(result);
+  } catch (err) {
+    const status = err.message.includes('traversal') ? 403 : 500;
+    res.status(status).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/files/save
+ * Body: { workspaceId, file, content }
+ * Atomically saves file content (write temp → rename).
+ */
+app.post('/api/files/save', requireAuth, async (req, res) => {
+  try {
+    const { workspaceId, file, content } = req.body || {};
+    if (!workspaceId) return res.status(400).json({ error: 'workspaceId required' });
+    if (!file) return res.status(400).json({ error: 'file required' });
+    if (typeof content !== 'string') return res.status(400).json({ error: 'content must be a string' });
+    const store = getStore();
+    const ws = store.getWorkspace(workspaceId);
+    if (!ws) return res.status(404).json({ error: 'Workspace not found' });
+    const workingDir = resolveWorkspaceDir(store, workspaceId);
+    if (!workingDir) return res.status(400).json({ error: 'Workspace has no sessions with a working directory' });
+    const result = await fileManager.saveContent(workingDir, file, content);
+    res.json(result);
+  } catch (err) {
+    const status = err.message.includes('traversal') ? 403 : 500;
+    res.status(status).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
  * GET /api/search?q=<query>&limit=20
  * Full-text search across all Claude Code JSONL session files.
