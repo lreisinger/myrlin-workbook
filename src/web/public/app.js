@@ -4659,6 +4659,119 @@ class CWMApp {
     }
   }
 
+  _initTasksTabs() {
+    const strip = document.getElementById('tasks-tab-strip');
+    if (!strip || strip._tabsWired) return;
+    strip._tabsWired = true;
+
+    // Show td tab only when enableTd is on
+    const tdTab = document.getElementById('tasks-tab-td');
+    if (tdTab) tdTab.hidden = !this.getSetting('enableTd');
+
+    strip.addEventListener('click', e => {
+      const tab = e.target.closest('.tasks-tab');
+      if (!tab) return;
+      const name = tab.dataset.tasksTab;
+      this._switchTasksTab(name);
+    });
+
+    // Restore persisted tab
+    const saved = localStorage.getItem('cwm_tasksTab') || 'worktree';
+    this._switchTasksTab(saved);
+  }
+
+  _switchTasksTab(name) {
+    const strip = document.getElementById('tasks-tab-strip');
+    if (!strip) return;
+
+    // Update tab buttons
+    strip.querySelectorAll('.tasks-tab').forEach(t => {
+      const active = t.dataset.tasksTab === name;
+      t.classList.toggle('active', active);
+      t.setAttribute('aria-selected', active);
+    });
+
+    // Show/hide panels
+    document.querySelectorAll('.tasks-tab-panel').forEach(p => {
+      p.hidden = p.dataset.tasksTab !== name;
+    });
+
+    // Show worktree header controls only on worktree tab
+    const headerActions = document.querySelector('.tasks-header-actions');
+    if (headerActions) headerActions.hidden = name !== 'worktree';
+
+    localStorage.setItem('cwm_tasksTab', name);
+    this._activeTasksTab = name;
+
+    // Trigger data load for the active tab
+    if (name === 'worktree') this.renderTasksView();
+    if (name === 'td') this.renderTasksTdPanel();
+  }
+
+  async renderTasksTdPanel() {
+    const panel = document.getElementById('tasks-td-panel');
+    if (!panel) return;
+    if (!this.getSetting('enableTd')) return;
+
+    const ws = this.state.activeWorkspace;
+
+    const showPlaceholder = (msg, isError) => {
+      panel.textContent = '';
+      const el = document.createElement('div');
+      el.className = isError ? 'tasks-placeholder tasks-placeholder--error' : 'tasks-placeholder';
+      el.textContent = msg;
+      panel.appendChild(el);
+    };
+
+    if (!ws) {
+      showPlaceholder('No active project selected', false);
+      return;
+    }
+
+    showPlaceholder('Loading td issues\u2026', false);
+
+    try {
+      const data = await this.api('GET', `/api/workspaces/${ws.id}/td/issues`);
+      const issues = data.issues || [];
+
+      if (issues.length === 0) {
+        showPlaceholder('No open td issues for this project', false);
+        return;
+      }
+
+      panel.textContent = '';
+      for (const issue of issues) {
+        const row = document.createElement('div');
+        row.className = 'tasks-td-row';
+
+        const dot = document.createElement('span');
+        dot.className = 'td-status-dot ' + (issue.status || 'open');
+
+        const idEl = document.createElement('span');
+        idEl.className = 'td-issue-id';
+        idEl.textContent = issue.id;
+
+        const titleEl = document.createElement('span');
+        titleEl.className = 'td-issue-title';
+        titleEl.textContent = issue.title || issue.id;
+
+        row.append(dot, idEl, titleEl);
+
+        if (issue.priority) {
+          const pri = document.createElement('span');
+          pri.className = 'td-priority-badge priority-' + issue.priority.toLowerCase();
+          pri.textContent = issue.priority;
+          row.appendChild(pri);
+        }
+
+        row.addEventListener('click', () => this.openTdIssueModal(issue.id));
+        panel.appendChild(row);
+      }
+    } catch (err) {
+      showPlaceholder('Failed to load td issues: ' + (err.message || 'unknown error'), true);
+    }
+  }
+
   setTasksLayout(layout) {
     this._tasksLayout = layout;
     localStorage.setItem('cwm_tasksLayout', layout);
@@ -6397,7 +6510,10 @@ class CWMApp {
     }
 
     if (isTasks) {
-      this.renderTasksView();
+      this._initTasksTabs();
+      if (!this._activeTasksTab || this._activeTasksTab === 'worktree') {
+        this.renderTasksView();
+      }
     } else if (isDocs) {
       this.loadDocs();
       this.loadTdIssues();

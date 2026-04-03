@@ -972,7 +972,20 @@
         <!-- Tasks Panel (worktree tasks view) -->
         <div class="tasks-panel" id="tasks-panel" hidden>
           <div class="tasks-panel-header">
-            <h3>Worktree Tasks</h3>
+            <div class="tasks-tab-strip" id="tasks-tab-strip" role="tablist">
+              <button class="tasks-tab active" data-tasks-tab="worktree" role="tab" aria-selected="true">
+                Worktree Tasks
+              </button>
+              <button class="tasks-tab" data-tasks-tab="td" role="tab" aria-selected="false" id="tasks-tab-td" hidden>
+                td
+              </button>
+              <button class="tasks-tab" data-tasks-tab="git" role="tab" aria-selected="false">
+                Git
+              </button>
+              <button class="tasks-tab" data-tasks-tab="files" role="tab" aria-selected="false">
+                Files
+              </button>
+            </div>
             <div class="tasks-header-actions">
               <input type="text" class="tasks-search-input" id="tasks-search" placeholder="Filter tasks..." autocomplete="off" spellcheck="false">
               <div class="tasks-layout-toggle" id="tasks-layout-toggle" title="Toggle list/board view">
@@ -989,47 +1002,62 @@
               </button>
             </div>
           </div>
-          <div class="tasks-list" id="tasks-list"></div>
-          <div class="kanban-board" id="kanban-board" style="display:none">
-            <div class="kanban-column" data-status="backlog">
-              <div class="kanban-column-header">
-                <span class="kanban-column-dot backlog"></span>
-                <span class="kanban-column-title">Backlog</span>
-                <span class="kanban-column-count">0</span>
+          <div class="tasks-tab-panel" data-tasks-tab="worktree">
+            <div class="tasks-list" id="tasks-list"></div>
+            <div class="kanban-board" id="kanban-board" style="display:none">
+              <div class="kanban-column" data-status="backlog">
+                <div class="kanban-column-header">
+                  <span class="kanban-column-dot backlog"></span>
+                  <span class="kanban-column-title">Backlog</span>
+                  <span class="kanban-column-count">0</span>
+                </div>
+                <div class="kanban-column-body" data-status="backlog"></div>
               </div>
-              <div class="kanban-column-body" data-status="backlog"></div>
+              <div class="kanban-column" data-status="planning">
+                <div class="kanban-column-header">
+                  <span class="kanban-column-dot planning"></span>
+                  <span class="kanban-column-title">Planning</span>
+                  <span class="kanban-column-count">0</span>
+                </div>
+                <div class="kanban-column-body" data-status="planning"></div>
+              </div>
+              <div class="kanban-column" data-status="running">
+                <div class="kanban-column-header">
+                  <span class="kanban-column-dot running"></span>
+                  <span class="kanban-column-title">Running</span>
+                  <span class="kanban-column-count">0</span>
+                </div>
+                <div class="kanban-column-body" data-status="running"></div>
+              </div>
+              <div class="kanban-column" data-status="review">
+                <div class="kanban-column-header">
+                  <span class="kanban-column-dot review"></span>
+                  <span class="kanban-column-title">Review</span>
+                  <span class="kanban-column-count">0</span>
+                </div>
+                <div class="kanban-column-body" data-status="review"></div>
+              </div>
+              <div class="kanban-column" data-status="completed">
+                <div class="kanban-column-header">
+                  <span class="kanban-column-dot completed"></span>
+                  <span class="kanban-column-title">Done</span>
+                  <span class="kanban-column-count">0</span>
+                </div>
+                <div class="kanban-column-body" data-status="completed"></div>
+              </div>
             </div>
-            <div class="kanban-column" data-status="planning">
-              <div class="kanban-column-header">
-                <span class="kanban-column-dot planning"></span>
-                <span class="kanban-column-title">Planning</span>
-                <span class="kanban-column-count">0</span>
-              </div>
-              <div class="kanban-column-body" data-status="planning"></div>
+          </div>
+          <div class="tasks-tab-panel" data-tasks-tab="td" hidden>
+            <div id="tasks-td-panel" class="tasks-inner-panel"></div>
+          </div>
+          <div class="tasks-tab-panel" data-tasks-tab="git" hidden>
+            <div id="tasks-git-panel" class="tasks-inner-panel">
+              <div class="tasks-placeholder">Git integration coming soon</div>
             </div>
-            <div class="kanban-column" data-status="running">
-              <div class="kanban-column-header">
-                <span class="kanban-column-dot running"></span>
-                <span class="kanban-column-title">Running</span>
-                <span class="kanban-column-count">0</span>
-              </div>
-              <div class="kanban-column-body" data-status="running"></div>
-            </div>
-            <div class="kanban-column" data-status="review">
-              <div class="kanban-column-header">
-                <span class="kanban-column-dot review"></span>
-                <span class="kanban-column-title">Review</span>
-                <span class="kanban-column-count">0</span>
-              </div>
-              <div class="kanban-column-body" data-status="review"></div>
-            </div>
-            <div class="kanban-column" data-status="completed">
-              <div class="kanban-column-header">
-                <span class="kanban-column-dot completed"></span>
-                <span class="kanban-column-title">Done</span>
-                <span class="kanban-column-count">0</span>
-              </div>
-              <div class="kanban-column-body" data-status="completed"></div>
+          </div>
+          <div class="tasks-tab-panel" data-tasks-tab="files" hidden>
+            <div id="tasks-files-panel" class="tasks-inner-panel">
+              <div class="tasks-placeholder">File browser coming soon</div>
             </div>
           </div>
         </div>
