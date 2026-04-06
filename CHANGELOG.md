@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.15] - 2026-04-06
+
+### Fixed
+
+- **Server crashes when parent shell exits** - On Windows, backgrounding the server with `&` does not detach the process tree. When the parent bash/terminal session ends, the server dies silently (no crash log, no restart). Added `--daemon` mode to the supervisor that re-spawns itself fully detached with stdio redirected to `logs/server.log` and a PID file at `logs/server.pid`. Use `npm run gui:daemon` or `node src/supervisor.js --daemon`.
+- **EPIPE cascade kills server** - When stdout/stderr pipe breaks (parent process gone), the `uncaughtException` handler called `console.error()`, which threw another EPIPE, creating an infinite exception loop. Added EPIPE error handlers on `process.stdout` and `process.stderr` in both `gui.js` and `supervisor.js`. Wrapped all console calls in exception handlers with try/catch as a secondary guard.
+
 ## [0.9.14] - 2026-04-02
 
 ### Fixed

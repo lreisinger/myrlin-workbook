@@ -1354,7 +1354,9 @@ function getStore() {
     process.on('SIGINT', () => { flushOnExit(); process.exit(0); });
     process.on('SIGTERM', () => { flushOnExit(); process.exit(0); });
     process.on('uncaughtException', (err) => {
-      console.error('[Store] Uncaught exception, flushing state:', err.message);
+      // Guard: console.error can itself throw EPIPE if stdout is broken,
+      // which triggers another uncaughtException, creating an infinite loop.
+      try { console.error('[Store] Uncaught exception, flushing state:', err.message); } catch (_) {}
       flushOnExit();
     });
   }

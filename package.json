@@ -1,6 +1,6 @@
 {
   "name": "myrlin-workbook",
-  "version": "0.9.14",
+  "version": "0.9.15",
   "description": "Browser-based project manager for Claude Code sessions - session discovery, multi-terminal, cost tracking, docs, and kanban board",
   "main": "src/index.js",
   "bin": {
@@ -13,6 +13,7 @@
     "start": "node src/index.js",
     "demo": "node src/demo.js",
     "gui": "node src/supervisor.js",
+    "gui:daemon": "node src/supervisor.js --daemon",
     "gui:bare": "node src/gui.js",
     "gui:demo": "node src/supervisor.js --demo",
     "test": "node test/run.js",

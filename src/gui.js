@@ -13,6 +13,14 @@
  *   PORT=3456                 Override the default port
  */
 
+// ─── EPIPE Protection ─────────────────────────────────────
+// When the parent process (e.g. a shell or pipe) disappears, writes to
+// stdout/stderr throw EPIPE. Without this handler, EPIPE becomes an
+// uncaughtException, and the exception handler's console.error() throws
+// another EPIPE, creating an infinite cascade that kills the server.
+process.stdout.on('error', (err) => { if (err.code !== 'EPIPE') throw err; });
+process.stderr.on('error', (err) => { if (err.code !== 'EPIPE') throw err; });
+
 const { getStore } = require('./state/store');
 const { startServer, getPtyManager } = require('./web/server');
 const { backupFrontend } = require('./web/backup');
@@ -207,10 +215,12 @@ const { logError, logWarning } = require('./crash-logger');
 
 process.on('unhandledRejection', (reason) => {
   logWarning('server', 'Unhandled promise rejection', reason);
-  console.error('[Server] Unhandled promise rejection:', reason);
+  try { console.error('[Server] Unhandled promise rejection:', reason); } catch (_) {}
 });
 
 process.on('uncaughtException', (err) => {
   logError('server', 'Uncaught exception', err);
-  console.error('[Server] Uncaught exception:', err);
+  // Guard: console.error can throw EPIPE if stdout is broken, which triggers
+  // another uncaughtException, creating an infinite cascade that kills the process.
+  try { console.error('[Server] Uncaught exception:', err); } catch (_) {}
 });
