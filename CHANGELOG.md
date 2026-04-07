@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.22] - 2026-04-06
+
+### Fixed
+
+- **Lazy-connect terminal panes to prevent OOM** - Previously, switching to any tab group (or restoring layout) spawned ALL panes' Claude processes immediately. With 11 tab groups and 22+ panes, visiting each group accumulated 15+ Claude processes (~150MB each), exhausting system memory. Now, only the active tab group's panes auto-connect on load. Non-cached tab groups show a "Click to connect" placeholder that preserves session info in the layout. Users click individual panes to connect on demand. Layout saves preserve disconnected placeholders, so no session mapping is ever lost.
+
 ## [0.9.21] - 2026-04-06
 
 ### Fixed

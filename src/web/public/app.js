@@ -9058,6 +9058,36 @@ class CWMApp {
      TERMINAL GRID VIEW
      ═══════════════════════════════════════════════════════════ */
 
+  /**
+   * Show a disconnected placeholder in a terminal pane slot.
+   * Preserves session info in terminalPanes[] for layout saves.
+   * Click reconnects via openTerminalInPane().
+   */
+  _showDisconnectedPlaceholder(slotIdx, sessionId, sessionName, spawnOpts) {
+    // Store placeholder so saveCurrentGroupPanes preserves the mapping
+    this.terminalPanes[slotIdx] = { sessionId, sessionName, spawnOpts: spawnOpts || {}, _disconnected: true };
+    const paneEl = document.getElementById(`term-pane-${slotIdx}`);
+    if (!paneEl) return;
+    paneEl.hidden = false;
+    paneEl.classList.remove('terminal-pane-empty');
+    const titleEl = paneEl.querySelector('.terminal-pane-title');
+    if (titleEl) titleEl.textContent = sessionName || sessionId;
+    const closeBtn = paneEl.querySelector('.terminal-pane-close');
+    if (closeBtn) closeBtn.hidden = false;
+    const container = document.getElementById(`term-container-${slotIdx}`);
+    if (container) {
+      container.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:8px;color:var(--overlay0);font-size:13px;cursor:pointer;" class="reconnect-prompt">
+        <span style="font-size:20px;">&#x1F50C;</span>
+        <span>${this.escapeHtml(sessionName || sessionId)}</span>
+        <span style="font-size:11px;opacity:0.7;">Click to connect</span>
+      </div>`;
+      container.querySelector('.reconnect-prompt').addEventListener('click', () => {
+        this.openTerminalInPane(slotIdx, sessionId, sessionName, spawnOpts);
+      });
+    }
+    this.updateTerminalGridLayout();
+  }
+
   openTerminalInPane(slotIdx, sessionId, sessionName, spawnOpts) {
     // Check localStorage for a previously saved name for this session
     const savedTitle = this.getProjectSessionTitle(sessionId);
@@ -12048,10 +12078,12 @@ class CWMApp {
             const uploadBtn = paneEl.querySelector('.terminal-pane-upload');
             if (uploadBtn) uploadBtn.hidden = false;
           }
-          // Reattach xterm DOM
+          // Reattach xterm DOM, or re-render placeholder for disconnected panes
           if (cached.domFragments[i]) {
             const termContainer = document.getElementById(`term-container-${i}`);
             if (termContainer) termContainer.appendChild(cached.domFragments[i]);
+          } else if (cached.panes[i]._disconnected) {
+            this._showDisconnectedPlaceholder(i, cached.panes[i].sessionId, cached.panes[i].sessionName, cached.panes[i].spawnOpts);
           }
         }
       }
@@ -12071,12 +12103,15 @@ class CWMApp {
         }
       });
     } else {
-      // No cache, create fresh connections (first time opening this group)
+      // No cache: show disconnected placeholders instead of spawning all PTYs.
+      // Each PTY spawns a Claude process (~150MB), so eagerly connecting all
+      // panes across all tab groups would consume gigabytes of system memory.
+      // Users click a pane to connect on demand.
       const group = this._tabGroups.find(g => g.id === groupId);
       if (group && group.panes) {
         group.panes.forEach(p => {
           if (p.sessionId && !this.terminalPanes[p.slot]) {
-            this.openTerminalInPane(p.slot, p.sessionId, p.sessionName || 'Terminal', p.spawnOpts || {});
+            this._showDisconnectedPlaceholder(p.slot, p.sessionId, p.sessionName || 'Terminal', p.spawnOpts || {});
           }
         });
       }
