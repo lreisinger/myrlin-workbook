@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.20] - 2026-04-06
+
+### Fixed
+
+- **Terminal pane session info lost on PTY disconnect** - When a PTY session was killed (memory watchdog, spawn cap, or crash), `onFatalError` called `closeTerminalPane()` which set `terminalPanes[idx] = null` and showed "Drop a session here". The next debounced layout save would persist this null, permanently losing which session was assigned to that pane. Now `onFatalError` preserves the session ID, name, and spawn options in a lightweight placeholder and shows a "Disconnected. Click to reconnect." overlay instead. Layout saves include these disconnected panes so no session mapping is ever lost.
+
 ## [0.9.19] - 2026-04-06
 
 ### Fixed

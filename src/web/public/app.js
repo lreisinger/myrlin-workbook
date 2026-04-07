@@ -9110,11 +9110,33 @@ class CWMApp {
       });
     };
 
-    // Auto-close pane on fatal connection error (max retries exhausted or server error).
-    // Prevents dead panes from occupying grid space in the terminal layout.
-    tp.onFatalError = () => {
+    // On fatal connection error, show disconnected state but PRESERVE pane info.
+    // The session ID, name, and spawnOpts stay in the layout so the user can
+    // reconnect by clicking, and layout saves don't lose the session mapping.
+    tp.onFatalError = (failedSessionId) => {
       const idx = this.terminalPanes.indexOf(tp);
-      if (idx !== -1) this.closeTerminalPane(idx);
+      if (idx === -1) return;
+      // Stash session info before disposing so we can offer reconnect
+      const sid = tp.sessionId;
+      const sName = tp.sessionName;
+      const opts = { ...(tp.spawnOpts || {}) };
+      tp.dispose();
+      // Replace the TerminalPane with a lightweight placeholder that preserves
+      // the session mapping for layout saves (saveCurrentGroupPanes reads these).
+      this.terminalPanes[idx] = { sessionId: sid, sessionName: sName, spawnOpts: opts, _disconnected: true };
+      const paneEl = document.getElementById(`term-pane-${idx}`);
+      if (!paneEl) return;
+      const container = document.getElementById(`term-container-${idx}`);
+      if (container) {
+        container.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:8px;color:var(--overlay0);font-size:13px;cursor:pointer;" class="reconnect-prompt">
+          <span style="font-size:20px;">&#x26A0;</span>
+          <span>${this.escapeHtml(sName || sid)}</span>
+          <span style="font-size:11px;opacity:0.7;">Disconnected. Click to reconnect.</span>
+        </div>`;
+        container.querySelector('.reconnect-prompt').addEventListener('click', () => {
+          this.openTerminalInPane(idx, sid, sName, opts);
+        });
+      }
     };
 
     // Enable auto-trust if the setting is on
@@ -12083,12 +12105,16 @@ class CWMApp {
 
     group.panes = [];
     for (let i = 0; i < CWMApp.MAX_PANES; i++) {
-      if (this.terminalPanes[i]) {
+      const tp = this.terminalPanes[i];
+      // Save both live TerminalPanes and disconnected placeholders.
+      // Disconnected placeholders have { sessionId, sessionName, spawnOpts, _disconnected: true }
+      // and MUST be preserved so layout restores don't lose session mappings.
+      if (tp && tp.sessionId) {
         group.panes.push({
           slot: i,
-          sessionId: this.terminalPanes[i].sessionId,
-          sessionName: this.terminalPanes[i].sessionName,
-          spawnOpts: this.terminalPanes[i].spawnOpts || {},
+          sessionId: tp.sessionId,
+          sessionName: tp.sessionName,
+          spawnOpts: tp.spawnOpts || {},
         });
       }
     }
