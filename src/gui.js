@@ -189,6 +189,52 @@ if (!process.env.CWM_NO_OPEN) {
   }
 }
 
+// ─── Memory Watchdog ──────────────────────────────────────
+// Monitor RSS and kill idle PTY sessions when memory exceeds threshold.
+// This prevents the OS from silently OOM-killing the entire process tree.
+const MEMORY_CHECK_INTERVAL = 30000; // Check every 30 seconds
+const MEMORY_WARN_MB = 350;          // Warn and kill idle PTYs
+const MEMORY_CRITICAL_MB = 450;      // Force-kill all clientless PTYs
+
+const _memoryWatchdog = setInterval(() => {
+  const rssMB = Math.round(process.memoryUsage().rss / 1024 / 1024);
+  if (rssMB < MEMORY_WARN_MB) return;
+
+  const { logWarning } = require('./crash-logger');
+  const ptyManager = getPtyManager();
+  if (!ptyManager) return;
+
+  const sessions = ptyManager.listSessions();
+  const isCritical = rssMB >= MEMORY_CRITICAL_MB;
+  const label = isCritical ? 'CRITICAL' : 'WARNING';
+  try { console.log(`[Memory ${label}] RSS=${rssMB}MB, ${sessions.length} PTY sessions`); } catch (_) {}
+  logWarning('server', `Memory ${label}: RSS=${rssMB}MB, ${sessions.length} PTY sessions`);
+
+  // Kill PTY sessions with zero connected WebSocket clients first
+  let killed = 0;
+  for (const s of sessions) {
+    if (s.clientCount === 0) {
+      ptyManager.killSession(s.sessionId);
+      killed++;
+    }
+  }
+
+  // In critical mode, also kill sessions that have been alive longest
+  if (isCritical && killed === 0 && sessions.length > 2) {
+    const oldest = sessions.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    ptyManager.killSession(oldest[0].sessionId);
+    killed++;
+  }
+
+  if (killed > 0) {
+    try { console.log(`[Memory] Killed ${killed} PTY session(s) to free memory`); } catch (_) {}
+  }
+
+  // Force GC if available (node --expose-gc)
+  if (global.gc) global.gc();
+}, MEMORY_CHECK_INTERVAL);
+_memoryWatchdog.unref();
+
 // ─── Graceful Shutdown ─────────────────────────────────────
 
 process.on('SIGINT', () => {

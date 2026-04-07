@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.16] - 2026-04-06
+
+### Fixed
+
+- **Server OOM crash from unbounded PTY sessions** - The frontend auto-reconnects all terminal panes on page load, which could spawn 20-30 Claude processes simultaneously (each 100-200MB). The OS silently killed the entire process tree with no crash log. Added a hard cap of 10 concurrent PTY sessions; spawns beyond the limit are rejected with a message to the client. Also added a memory watchdog that monitors RSS every 30 seconds and kills idle (zero-client) PTY sessions when memory exceeds 350MB, with more aggressive cleanup at 450MB. Supervisor now launches gui.js with `--max-old-space-size=512` to trigger Node.js GC pressure before the OS intervenes.
+
 ## [0.9.15] - 2026-04-06
 
 ### Fixed

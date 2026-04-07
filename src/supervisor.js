@@ -83,7 +83,7 @@ function startChild() {
   lastStartTime = Date.now();
   console.log(`[supervisor] Starting GUI server (attempt ${consecutiveRestarts + 1})...`);
 
-  child = spawn(process.execPath, [guiScript, ...guiArgs], {
+  child = spawn(process.execPath, ['--max-old-space-size=512', guiScript, ...guiArgs], {
     stdio: 'inherit',
     env: { ...process.env, CWM_NO_OPEN: consecutiveRestarts > 0 ? '1' : '' },
   });

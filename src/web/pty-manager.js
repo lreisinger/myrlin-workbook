@@ -108,6 +108,11 @@ class PtySession {
   }
 }
 
+// Maximum number of live PTY sessions. Each one is a ConPTY handle + a Claude
+// process (100-200MB each). Beyond this limit, new spawns are rejected to
+// prevent the OS from OOM-killing the server process tree.
+const MAX_PTY_SESSIONS = 10;
+
 class PtySessionManager {
   constructor() {
     this.sessions = new Map(); // sessionId -> PtySession
@@ -130,6 +135,13 @@ class PtySessionManager {
     const existing = this.sessions.get(sessionId);
     if (existing && existing.alive) {
       return existing;
+    }
+
+    // Enforce max live sessions to prevent OOM from too many ConPTY handles
+    const aliveCount = [...this.sessions.values()].filter(s => s.alive).length;
+    if (aliveCount >= MAX_PTY_SESSIONS) {
+      console.log(`[PTY] Rejected spawn for ${sessionId}: ${aliveCount} live sessions (max ${MAX_PTY_SESSIONS})`);
+      return null;
     }
 
     // ── Defense-in-depth: validate all user-controlled inputs ──
