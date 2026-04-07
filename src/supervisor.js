@@ -33,25 +33,57 @@ if (process.argv.includes('--daemon')) {
   const logDir = path.join(__dirname, '..', 'logs');
   if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
   const logFile = path.join(logDir, 'server.log');
-  const out = fs.openSync(logFile, 'a');
-  const err = fs.openSync(logFile, 'a');
+  const pidFile = path.join(logDir, 'server.pid');
 
   // Strip --daemon from args so the child runs in foreground (supervised) mode
   const childArgs = process.argv.slice(2).filter(a => a !== '--daemon');
+  const nodeExe = process.execPath;
+  const scriptArgs = [__filename, ...childArgs].map(a => `"${a}"`).join(' ');
 
-  const child = spawn(process.execPath, [__filename, ...childArgs], {
-    stdio: ['ignore', out, err],
-    detached: true,
-    env: { ...process.env },
-  });
+  if (process.platform === 'win32') {
+    // On Windows, Node's detached:true still inherits the console session's
+    // Job Object. When the parent shell (Git Bash, cmd, Claude Code) exits,
+    // Windows kills the entire job group. Use cmd.exe /c start to create a
+    // process in a completely new console session, then redirect its output.
+    const { execSync } = require('child_process');
+    const cmd = `cmd.exe /c start /b "" "${nodeExe}" --max-old-space-size=1024 ${scriptArgs} >> "${logFile}" 2>&1`;
+    execSync(cmd, { stdio: 'ignore', windowsHide: true });
 
-  // Write PID file so other tools can find/stop the server
-  const pidFile = path.join(logDir, 'server.pid');
-  fs.writeFileSync(pidFile, String(child.pid), 'utf8');
-
-  child.unref();
-  console.log(`[supervisor] Daemonized server (PID ${child.pid}), logs at ${logFile}`);
-  process.exit(0);
+    // The PID isn't directly available from start /b. Write a marker so we
+    // can find it via tasklist. Wait briefly for the process to appear.
+    setTimeout(() => {
+      try {
+        const { execSync: es } = require('child_process');
+        const psCmd = `powershell.exe -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*supervisor.js*' -and $_.CommandLine -notlike '*--daemon*' } | Select-Object -ExpandProperty ProcessId"`;
+        const out = es(psCmd, { encoding: 'utf8', timeout: 10000 });
+        const pids = out.trim().split('\n').map(l => l.trim()).filter(Boolean);
+        if (pids.length > 0) {
+          const pid = pids[pids.length - 1];
+          fs.writeFileSync(pidFile, pid, 'utf8');
+          console.log(`[supervisor] Daemonized server (PID ${pid}), logs at ${logFile}`);
+        } else {
+          console.log(`[supervisor] Daemonized server, logs at ${logFile}`);
+        }
+      } catch (_) {
+        console.log(`[supervisor] Daemonized server, logs at ${logFile}`);
+      }
+      process.exit(0);
+    }, 2000);
+  } else {
+    // Unix: standard detach with file descriptors
+    const out = fs.openSync(logFile, 'a');
+    const err = fs.openSync(logFile, 'a');
+    const child = spawn(nodeExe, ['--max-old-space-size=1024', __filename, ...childArgs], {
+      stdio: ['ignore', out, err],
+      detached: true,
+      env: { ...process.env },
+    });
+    fs.writeFileSync(pidFile, String(child.pid), 'utf8');
+    child.unref();
+    console.log(`[supervisor] Daemonized server (PID ${child.pid}), logs at ${logFile}`);
+    process.exit(0);
+  }
+  return; // Guard: don't fall through to supervisor logic while waiting
 }
 
 // ─── EPIPE Protection ────────────────────────────────────

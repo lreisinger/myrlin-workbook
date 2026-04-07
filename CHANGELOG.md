@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.18] - 2026-04-06
+
+### Fixed
+
+- **Daemon mode process still killed when parent shell exits (Windows)** - Node.js `detached: true` does not escape the parent console session's Job Object on Windows. When the launching shell (Git Bash, Claude Code) exits, Windows kills the entire job group including the "detached" supervisor. Now uses `cmd.exe /c start /b` on Windows to create the process in a completely new console session that is truly independent of the parent. Verified: the supervisor's parent PID becomes orphaned (non-existent), so no parent death can cascade.
+
 ## [0.9.17] - 2026-04-06
 
 ### Fixed
