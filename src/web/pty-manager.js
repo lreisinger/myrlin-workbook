@@ -111,7 +111,7 @@ class PtySession {
 // Maximum number of live PTY sessions. Each one is a ConPTY handle + a Claude
 // process (100-200MB each). Beyond this limit, new spawns are rejected to
 // prevent the OS from OOM-killing the server process tree.
-const MAX_PTY_SESSIONS = 10;
+const MAX_PTY_SESSIONS = 5;
 
 class PtySessionManager {
   constructor() {

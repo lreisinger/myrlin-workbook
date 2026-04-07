@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.19] - 2026-04-06
+
+### Fixed
+
+- **Repeated heap OOM crashes (exit code 134)** - ConPTY on Windows allocates heavy native memory outside V8's heap, so `--max-old-space-size` alone cannot prevent OOM. Reduced max concurrent PTY sessions from 10 to 5. Lowered memory watchdog thresholds (warn at 200MB, critical at 350MB) and increased check frequency to every 15 seconds. Added periodic RSS logging every 60 seconds to `server.log` so memory trajectory is always visible for debugging.
+
 ## [0.9.18] - 2026-04-06
 
 ### Fixed

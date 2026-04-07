@@ -191,10 +191,22 @@ if (!process.env.CWM_NO_OPEN) {
 
 // ─── Memory Watchdog ──────────────────────────────────────
 // Monitor RSS and kill idle PTY sessions when memory exceeds threshold.
-// This prevents the OS from silently OOM-killing the entire process tree.
-const MEMORY_CHECK_INTERVAL = 30000; // Check every 30 seconds
-const MEMORY_WARN_MB = 350;          // Warn and kill idle PTYs
-const MEMORY_CRITICAL_MB = 450;      // Force-kill all clientless PTYs
+// ConPTY on Windows allocates significant native memory (outside V8 heap)
+// so RSS can spike well beyond --max-old-space-size.
+const MEMORY_CHECK_INTERVAL = 15000; // Check every 15 seconds
+const MEMORY_WARN_MB = 200;          // Start killing idle (zero-client) PTYs
+const MEMORY_CRITICAL_MB = 350;      // Aggressively kill PTYs to survive
+
+// Periodic RSS logging so we can trace memory trajectory in server.log
+const _rssLogger = setInterval(() => {
+  const mem = process.memoryUsage();
+  const ptyManager = getPtyManager();
+  const ptySessions = ptyManager ? ptyManager.listSessions().length : 0;
+  try {
+    console.log(`[RSS] ${Math.round(mem.rss / 1024 / 1024)}MB heap=${Math.round(mem.heapUsed / 1024 / 1024)}/${Math.round(mem.heapTotal / 1024 / 1024)}MB pty=${ptySessions}`);
+  } catch (_) {}
+}, 60000);
+_rssLogger.unref();
 
 const _memoryWatchdog = setInterval(() => {
   const rssMB = Math.round(process.memoryUsage().rss / 1024 / 1024);
@@ -220,8 +232,8 @@ const _memoryWatchdog = setInterval(() => {
   }
 
   // In critical mode, also kill sessions that have been alive longest
-  if (isCritical && killed === 0 && sessions.length > 2) {
-    const oldest = sessions.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  if (isCritical && killed === 0 && sessions.length > 1) {
+    const oldest = [...sessions].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
     ptyManager.killSession(oldest[0].sessionId);
     killed++;
   }
