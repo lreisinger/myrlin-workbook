@@ -1822,7 +1822,9 @@ class CWMApp {
     this.showApp();
     this.initDragAndDrop();
     this.initTerminalResize();
-    await this.initTerminalGroups();
+    // Terminal group restore spawns PTY sessions and can be slow.
+    // Run it in the background so login resolves immediately.
+    this.initTerminalGroups().catch(e => console.error('Terminal groups init:', e));
     this.initTerminalPaneSwipe();
     this.initNotesEditor();
     this.initAIInsights();
