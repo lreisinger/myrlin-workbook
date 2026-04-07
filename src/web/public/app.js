@@ -9095,13 +9095,19 @@ class CWMApp {
       sessionName = savedTitle;
     }
     console.log('[DnD] openTerminalInPane slot:', slotIdx, 'session:', sessionId, 'name:', sessionName);
+    // If the target slot has a disconnected placeholder, clear it so we reuse the slot.
+    // Without this, "Click to connect" opens in a different pane instead of replacing.
+    if (this.terminalPanes[slotIdx] && this.terminalPanes[slotIdx]._disconnected) {
+      this.terminalPanes[slotIdx] = null;
+    }
+
     // If the target slot already has an active terminal, find the next empty slot
     if (this.terminalPanes[slotIdx]) {
       const emptySlot = this.terminalPanes.findIndex(p => p === null);
       if (emptySlot !== -1) {
         slotIdx = emptySlot;
       } else {
-        // All slots full - replace the target slot
+        // All slots full, replace the target slot
         this.terminalPanes[slotIdx].dispose();
         this.terminalPanes[slotIdx] = null;
       }
