@@ -46,7 +46,7 @@ if (process.argv.includes('--daemon')) {
     // Windows kills the entire job group. Use cmd.exe /c start to create a
     // process in a completely new console session, then redirect its output.
     const { execSync } = require('child_process');
-    const cmd = `cmd.exe /c start /b "" "${nodeExe}" --max-old-space-size=1024 ${scriptArgs} >> "${logFile}" 2>&1`;
+    const cmd = `cmd.exe /c start /b "" "${nodeExe}" --max-old-space-size=4096 ${scriptArgs} >> "${logFile}" 2>&1`;
     execSync(cmd, { stdio: 'ignore', windowsHide: true });
 
     // The PID isn't directly available from start /b. Write a marker so we
@@ -73,7 +73,7 @@ if (process.argv.includes('--daemon')) {
     // Unix: standard detach with file descriptors
     const out = fs.openSync(logFile, 'a');
     const err = fs.openSync(logFile, 'a');
-    const child = spawn(nodeExe, ['--max-old-space-size=1024', __filename, ...childArgs], {
+    const child = spawn(nodeExe, ['--max-old-space-size=4096', __filename, ...childArgs], {
       stdio: ['ignore', out, err],
       detached: true,
       env: { ...process.env },
@@ -115,7 +115,7 @@ function startChild() {
   lastStartTime = Date.now();
   console.log(`[supervisor] Starting GUI server (attempt ${consecutiveRestarts + 1})...`);
 
-  child = spawn(process.execPath, ['--max-old-space-size=1024', guiScript, ...guiArgs], {
+  child = spawn(process.execPath, ['--max-old-space-size=4096', guiScript, ...guiArgs], {
     stdio: 'inherit',
     env: { ...process.env, CWM_NO_OPEN: consecutiveRestarts > 0 ? '1' : '' },
   });

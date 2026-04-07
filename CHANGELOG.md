@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.21] - 2026-04-06
+
+### Fixed
+
+- **Reverted PTY session cap and memory watchdog** - The 5-session cap and aggressive memory watchdog were killing PTY sessions and triggering layout saves that wiped pane data. Removed both limits entirely. Raised heap limit to 4GB so the server has room to breathe. The disconnected-pane preservation from v0.9.20 remains as a safety net.
+
 ## [0.9.20] - 2026-04-06
 
 ### Fixed
