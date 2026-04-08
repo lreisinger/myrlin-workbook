@@ -9063,30 +9063,9 @@ class CWMApp {
    * Preserves session info in terminalPanes[] for layout saves.
    * Click reconnects via openTerminalInPane().
    */
-  _showDisconnectedPlaceholder(slotIdx, sessionId, sessionName, spawnOpts) {
-    // Store placeholder so saveCurrentGroupPanes preserves the mapping
-    this.terminalPanes[slotIdx] = { sessionId, sessionName, spawnOpts: spawnOpts || {}, _disconnected: true };
-    const paneEl = document.getElementById(`term-pane-${slotIdx}`);
-    if (!paneEl) return;
-    paneEl.hidden = false;
-    paneEl.classList.remove('terminal-pane-empty');
-    const titleEl = paneEl.querySelector('.terminal-pane-title');
-    if (titleEl) titleEl.textContent = sessionName || sessionId;
-    const closeBtn = paneEl.querySelector('.terminal-pane-close');
-    if (closeBtn) closeBtn.hidden = false;
-    const container = document.getElementById(`term-container-${slotIdx}`);
-    if (container) {
-      container.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:8px;color:var(--overlay0);font-size:13px;cursor:pointer;" class="reconnect-prompt">
-        <span style="font-size:20px;">&#x1F50C;</span>
-        <span>${this.escapeHtml(sessionName || sessionId)}</span>
-        <span style="font-size:11px;opacity:0.7;">Click to connect</span>
-      </div>`;
-      container.querySelector('.reconnect-prompt').addEventListener('click', () => {
-        this.openTerminalInPane(slotIdx, sessionId, sessionName, spawnOpts);
-      });
-    }
-    this.updateTerminalGridLayout();
-  }
+  // _showDisconnectedPlaceholder removed in v0.9.23 - caused more issues than it solved
+  // (wrong pane on reconnect, unclosable panes, broken layout). Panes now connect
+  // directly on restore and close cleanly on fatal error.
 
   openTerminalInPane(slotIdx, sessionId, sessionName, spawnOpts) {
     // Check localStorage for a previously saved name for this session
@@ -9095,12 +9074,6 @@ class CWMApp {
       sessionName = savedTitle;
     }
     console.log('[DnD] openTerminalInPane slot:', slotIdx, 'session:', sessionId, 'name:', sessionName);
-    // If the target slot has a disconnected placeholder, clear it so we reuse the slot.
-    // Without this, "Click to connect" opens in a different pane instead of replacing.
-    if (this.terminalPanes[slotIdx] && this.terminalPanes[slotIdx]._disconnected) {
-      this.terminalPanes[slotIdx] = null;
-    }
-
     // If the target slot already has an active terminal, find the next empty slot
     if (this.terminalPanes[slotIdx]) {
       const emptySlot = this.terminalPanes.findIndex(p => p === null);
@@ -9146,33 +9119,21 @@ class CWMApp {
       });
     };
 
-    // On fatal connection error, show disconnected state but PRESERVE pane info.
-    // The session ID, name, and spawnOpts stay in the layout so the user can
-    // reconnect by clicking, and layout saves don't lose the session mapping.
+    // On fatal connection error, close the pane cleanly.
     tp.onFatalError = (failedSessionId) => {
       const idx = this.terminalPanes.indexOf(tp);
       if (idx === -1) return;
-      // Stash session info before disposing so we can offer reconnect
-      const sid = tp.sessionId;
-      const sName = tp.sessionName;
-      const opts = { ...(tp.spawnOpts || {}) };
       tp.dispose();
-      // Replace the TerminalPane with a lightweight placeholder that preserves
-      // the session mapping for layout saves (saveCurrentGroupPanes reads these).
-      this.terminalPanes[idx] = { sessionId: sid, sessionName: sName, spawnOpts: opts, _disconnected: true };
-      const paneEl = document.getElementById(`term-pane-${idx}`);
-      if (!paneEl) return;
-      const container = document.getElementById(`term-container-${idx}`);
-      if (container) {
-        container.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:8px;color:var(--overlay0);font-size:13px;cursor:pointer;" class="reconnect-prompt">
-          <span style="font-size:20px;">&#x26A0;</span>
-          <span>${this.escapeHtml(sName || sid)}</span>
-          <span style="font-size:11px;opacity:0.7;">Disconnected. Click to reconnect.</span>
-        </div>`;
-        container.querySelector('.reconnect-prompt').addEventListener('click', () => {
-          this.openTerminalInPane(idx, sid, sName, opts);
-        });
+      this.terminalPanes[idx] = null;
+      const deadPane = document.getElementById(`term-pane-${idx}`);
+      if (deadPane) {
+        deadPane.classList.add('terminal-pane-empty');
+        const header = deadPane.querySelector('.terminal-pane-title');
+        if (header) header.textContent = 'Drop a session here';
+        const closeBtn2 = deadPane.querySelector('.terminal-pane-close');
+        if (closeBtn2) closeBtn2.hidden = true;
       }
+      this.updateTerminalGridLayout();
     };
 
     // Enable auto-trust if the setting is on
@@ -12088,8 +12049,9 @@ class CWMApp {
           if (cached.domFragments[i]) {
             const termContainer = document.getElementById(`term-container-${i}`);
             if (termContainer) termContainer.appendChild(cached.domFragments[i]);
-          } else if (cached.panes[i]._disconnected) {
-            this._showDisconnectedPlaceholder(i, cached.panes[i].sessionId, cached.panes[i].sessionName, cached.panes[i].spawnOpts);
+          } else if (cached.panes[i].sessionId) {
+            // Cached pane had no DOM fragment (was disconnected), reconnect directly
+            this.openTerminalInPane(i, cached.panes[i].sessionId, cached.panes[i].sessionName, cached.panes[i].spawnOpts);
           }
         }
       }
@@ -12109,15 +12071,12 @@ class CWMApp {
         }
       });
     } else {
-      // No cache: show disconnected placeholders instead of spawning all PTYs.
-      // Each PTY spawns a Claude process (~150MB), so eagerly connecting all
-      // panes across all tab groups would consume gigabytes of system memory.
-      // Users click a pane to connect on demand.
+      // No cache, create fresh connections (first time opening this group)
       const group = this._tabGroups.find(g => g.id === groupId);
       if (group && group.panes) {
         group.panes.forEach(p => {
           if (p.sessionId && !this.terminalPanes[p.slot]) {
-            this._showDisconnectedPlaceholder(p.slot, p.sessionId, p.sessionName || 'Terminal', p.spawnOpts || {});
+            this.openTerminalInPane(p.slot, p.sessionId, p.sessionName || 'Terminal', p.spawnOpts || {});
           }
         });
       }
@@ -12147,9 +12106,7 @@ class CWMApp {
     group.panes = [];
     for (let i = 0; i < CWMApp.MAX_PANES; i++) {
       const tp = this.terminalPanes[i];
-      // Save both live TerminalPanes and disconnected placeholders.
-      // Disconnected placeholders have { sessionId, sessionName, spawnOpts, _disconnected: true }
-      // and MUST be preserved so layout restores don't lose session mappings.
+      // Save live TerminalPanes for layout restore.
       if (tp && tp.sessionId) {
         group.panes.push({
           slot: i,
