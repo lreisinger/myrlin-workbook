@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.25] - 2026-04-10
+
+### Fixed
+
+- **Image upload broken on npx installs** - Upload directory was relative to the npm package location, which is an ephemeral cache path on npx installs. Moved to `~/.myrlin/uploads/` so saved images have a stable, predictable path that Claude Code can always read (fixes #42, reported by @hybridandrew)
+
 ## [0.9.22] - 2026-04-06
 
 ### Fixed

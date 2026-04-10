@@ -5201,7 +5201,10 @@ app.post('/api/pty/:sessionId/upload-image',
     }
 
     const safeName = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`;
-    const dir = path.join(__dirname, '..', '..', 'uploads', sessionId);
+    // Save uploads to the data dir (~/.myrlin/uploads/) so paths are stable
+    // across npx runs and accessible to Claude Code.
+    const { getDataDir } = require('../utils/data-dir');
+    const dir = path.join(getDataDir(), 'uploads', sessionId);
     fs.mkdirSync(dir, { recursive: true });
 
     const filePath = path.join(dir, safeName);
