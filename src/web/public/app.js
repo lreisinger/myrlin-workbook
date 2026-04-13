@@ -1829,7 +1829,9 @@ class CWMApp {
     this.showApp();
     this.initDragAndDrop();
     this.initTerminalResize();
-    await this.initTerminalGroups();
+    // Terminal group restore spawns PTY sessions and can be slow.
+    // Run it in the background so login resolves immediately.
+    this.initTerminalGroups().catch(e => console.error('Terminal groups init:', e));
     this.initTerminalPaneSwipe();
     this.initNotesEditor();
     this.initAIInsights();
@@ -5250,7 +5252,7 @@ class CWMApp {
       errEl.textContent = 'Failed to load git status: ' + (err.message || 'unknown error');
       panel.appendChild(errEl);
     }
-  },
+  }
 
   /**
    * Load and render the diff for a specific file into the diff viewer pane.
@@ -5308,7 +5310,7 @@ class CWMApp {
       errEl.textContent = 'Failed to load diff: ' + (err.message || 'unknown');
       container.appendChild(errEl);
     }
-  },
+  }
 
   /**
    * Render the recent commit log section inside the left panel.
@@ -5371,7 +5373,7 @@ class CWMApp {
       errEl.textContent = 'Failed to load commits: ' + (err.message || 'unknown');
       logSection.appendChild(errEl);
     }
-  },
+  }
 
   /**
    * Format a Date as a human-readable relative time string.
@@ -5392,7 +5394,7 @@ class CWMApp {
     if (hours > 0) return `${hours}h ago`;
     if (minutes > 0) return `${minutes}m ago`;
     return 'just now';
-  },
+  }
 
   /** Fetch tasks and render in the active layout */
   async renderTasksView() {
@@ -9769,6 +9771,15 @@ class CWMApp {
      TERMINAL GRID VIEW
      ═══════════════════════════════════════════════════════════ */
 
+  /**
+   * Show a disconnected placeholder in a terminal pane slot.
+   * Preserves session info in terminalPanes[] for layout saves.
+   * Click reconnects via openTerminalInPane().
+   */
+  // _showDisconnectedPlaceholder removed in v0.9.23 - caused more issues than it solved
+  // (wrong pane on reconnect, unclosable panes, broken layout). Panes now connect
+  // directly on restore and close cleanly on fatal error.
+
   openTerminalInPane(slotIdx, sessionId, sessionName, spawnOpts) {
     // Check localStorage for a previously saved name for this session
     const savedTitle = this.getProjectSessionTitle(sessionId);
@@ -9782,7 +9793,7 @@ class CWMApp {
       if (emptySlot !== -1) {
         slotIdx = emptySlot;
       } else {
-        // All slots full - replace the target slot
+        // All slots full, replace the target slot
         this.terminalPanes[slotIdx].dispose();
         this.terminalPanes[slotIdx] = null;
       }
@@ -9821,11 +9832,21 @@ class CWMApp {
       });
     };
 
-    // Auto-close pane on fatal connection error (max retries exhausted or server error).
-    // Prevents dead panes from occupying grid space in the terminal layout.
-    tp.onFatalError = () => {
+    // On fatal connection error, close the pane cleanly.
+    tp.onFatalError = (failedSessionId) => {
       const idx = this.terminalPanes.indexOf(tp);
-      if (idx !== -1) this.closeTerminalPane(idx);
+      if (idx === -1) return;
+      tp.dispose();
+      this.terminalPanes[idx] = null;
+      const deadPane = document.getElementById(`term-pane-${idx}`);
+      if (deadPane) {
+        deadPane.classList.add('terminal-pane-empty');
+        const header = deadPane.querySelector('.terminal-pane-title');
+        if (header) header.textContent = 'Drop a session here';
+        const closeBtn2 = deadPane.querySelector('.terminal-pane-close');
+        if (closeBtn2) closeBtn2.hidden = true;
+      }
+      this.updateTerminalGridLayout();
     };
 
     // Enable auto-trust if the setting is on
@@ -12737,10 +12758,13 @@ class CWMApp {
             const uploadBtn = paneEl.querySelector('.terminal-pane-upload');
             if (uploadBtn) uploadBtn.hidden = false;
           }
-          // Reattach xterm DOM
+          // Reattach xterm DOM, or re-render placeholder for disconnected panes
           if (cached.domFragments[i]) {
             const termContainer = document.getElementById(`term-container-${i}`);
             if (termContainer) termContainer.appendChild(cached.domFragments[i]);
+          } else if (cached.panes[i].sessionId) {
+            // Cached pane had no DOM fragment (was disconnected), reconnect directly
+            this.openTerminalInPane(i, cached.panes[i].sessionId, cached.panes[i].sessionName, cached.panes[i].spawnOpts);
           }
         }
       }
@@ -12794,12 +12818,14 @@ class CWMApp {
 
     group.panes = [];
     for (let i = 0; i < CWMApp.MAX_PANES; i++) {
-      if (this.terminalPanes[i]) {
+      const tp = this.terminalPanes[i];
+      // Save live TerminalPanes for layout restore.
+      if (tp && tp.sessionId) {
         group.panes.push({
           slot: i,
-          sessionId: this.terminalPanes[i].sessionId,
-          sessionName: this.terminalPanes[i].sessionName,
-          spawnOpts: this.terminalPanes[i].spawnOpts || {},
+          sessionId: tp.sessionId,
+          sessionName: tp.sessionName,
+          spawnOpts: tp.spawnOpts || {},
         });
       }
     }

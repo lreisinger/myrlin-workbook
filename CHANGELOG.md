@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.25] - 2026-04-10
+
+### Fixed
+
+- **Image upload broken on npx installs** - Upload directory was relative to the npm package location, which is an ephemeral cache path on npx installs. Moved to `~/.myrlin/uploads/` so saved images have a stable, predictable path that Claude Code can always read (fixes #42, reported by @hybridandrew)
+
+## [0.9.22] - 2026-04-06
+
+### Fixed
+
+- **Lazy-connect terminal panes to prevent OOM** - Previously, switching to any tab group (or restoring layout) spawned ALL panes' Claude processes immediately. With 11 tab groups and 22+ panes, visiting each group accumulated 15+ Claude processes (~150MB each), exhausting system memory. Now, only the active tab group's panes auto-connect on load. Non-cached tab groups show a "Click to connect" placeholder that preserves session info in the layout. Users click individual panes to connect on demand. Layout saves preserve disconnected placeholders, so no session mapping is ever lost.
+
+## [0.9.21] - 2026-04-06
+
+### Fixed
+
+- **Reverted PTY session cap and memory watchdog** - The 5-session cap and aggressive memory watchdog were killing PTY sessions and triggering layout saves that wiped pane data. Removed both limits entirely. Raised heap limit to 4GB so the server has room to breathe. The disconnected-pane preservation from v0.9.20 remains as a safety net.
+
+## [0.9.20] - 2026-04-06
+
+### Fixed
+
+- **Terminal pane session info lost on PTY disconnect** - When a PTY session was killed (memory watchdog, spawn cap, or crash), `onFatalError` called `closeTerminalPane()` which set `terminalPanes[idx] = null` and showed "Drop a session here". The next debounced layout save would persist this null, permanently losing which session was assigned to that pane. Now `onFatalError` preserves the session ID, name, and spawn options in a lightweight placeholder and shows a "Disconnected. Click to reconnect." overlay instead. Layout saves include these disconnected panes so no session mapping is ever lost.
+
+## [0.9.19] - 2026-04-06
+
+### Fixed
+
+- **Repeated heap OOM crashes (exit code 134)** - ConPTY on Windows allocates heavy native memory outside V8's heap, so `--max-old-space-size` alone cannot prevent OOM. Reduced max concurrent PTY sessions from 10 to 5. Lowered memory watchdog thresholds (warn at 200MB, critical at 350MB) and increased check frequency to every 15 seconds. Added periodic RSS logging every 60 seconds to `server.log` so memory trajectory is always visible for debugging.
+
+## [0.9.18] - 2026-04-06
+
+### Fixed
+
+- **Daemon mode process still killed when parent shell exits (Windows)** - Node.js `detached: true` does not escape the parent console session's Job Object on Windows. When the launching shell (Git Bash, Claude Code) exits, Windows kills the entire job group including the "detached" supervisor. Now uses `cmd.exe /c start /b` on Windows to create the process in a completely new console session that is truly independent of the parent. Verified: the supervisor's parent PID becomes orphaned (non-existent), so no parent death can cascade.
+
+## [0.9.17] - 2026-04-06
+
+### Fixed
+
+- **Server OOM crash from unbounded PTY sessions** - The frontend auto-reconnects all terminal panes on page load, which could spawn 20-30 Claude processes simultaneously (each 100-200MB). The OS silently killed the entire process tree with no crash log. Added a hard cap of 10 concurrent PTY sessions; spawns beyond the limit are rejected with a message to the client. Also added a memory watchdog that monitors RSS every 30 seconds and kills idle (zero-client) PTY sessions when memory exceeds 350MB, with more aggressive cleanup at 450MB. Supervisor now launches gui.js with `--max-old-space-size=1024`.
+- **Login spinner stuck after entering password** - `_initializeApp()` awaited `initTerminalGroups()` which restores all terminal panes synchronously, spawning multiple PTY sessions. The login button stayed in loading state until all terminals connected. Terminal group restore is now non-blocking; the UI appears immediately while terminals reconnect in the background.
+
+## [0.9.15] - 2026-04-06
+
+### Fixed
+
+- **Server crashes when parent shell exits** - On Windows, backgrounding the server with `&` does not detach the process tree. When the parent bash/terminal session ends, the server dies silently (no crash log, no restart). Added `--daemon` mode to the supervisor that re-spawns itself fully detached with stdio redirected to `logs/server.log` and a PID file at `logs/server.pid`. Use `npm run gui:daemon` or `node src/supervisor.js --daemon`.
+- **EPIPE cascade kills server** - When stdout/stderr pipe breaks (parent process gone), the `uncaughtException` handler called `console.error()`, which threw another EPIPE, creating an infinite exception loop. Added EPIPE error handlers on `process.stdout` and `process.stderr` in both `gui.js` and `supervisor.js`. Wrapped all console calls in exception handlers with try/catch as a secondary guard.
+
+## [0.9.24] - 2026-04-08
+
+### Removed
+
+- **"Click to connect" disconnected placeholders** - Removed the lazy-connect placeholder system entirely. It caused cascading issues: reconnect opened in wrong pane, panes couldn't be closed, layout saves broke for placeholder entries. Terminal panes now connect directly on restore (initial load and tab group switch). Fatal connection errors close the pane cleanly instead of leaving an unclosable placeholder.
+
+## [0.9.23] - 2026-04-07
+
+### Fixed
+
+- **"Click to connect" opens new pane instead of reconnecting in place** - After restart, clicking the reconnect placeholder opened the session in a different empty pane because `openTerminalInPane` saw the placeholder object as an occupied slot and redirected. Now detects disconnected placeholders and clears them so the session reconnects in the same slot.
+
 ## [0.9.14] - 2026-04-02
 
 ### Fixed

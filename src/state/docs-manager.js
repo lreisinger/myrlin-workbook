@@ -11,8 +11,9 @@
 
 const fs = require('fs');
 const path = require('path');
+const { getDataDir } = require('../utils/data-dir');
 
-const DOCS_DIR = path.join(__dirname, '..', '..', 'state', 'docs');
+const DOCS_DIR = path.join(getDataDir(), 'docs');
 
 /**
  * Ensure the state/docs/ directory exists.

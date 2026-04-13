@@ -13,6 +13,7 @@ const { getStore } = require('./state/store');
 const { getNotificationManager } = require('./core/notifications');
 const { markStaleSessionsStopped } = require('./core/recovery');
 const { createApp } = require('./ui/app');
+const { getDataDir } = require('./utils/data-dir');
 
 function main() {
   const args = process.argv.slice(2);
@@ -26,7 +27,7 @@ function main() {
   if (isReset) {
     const fs = require('fs');
     const path = require('path');
-    const stateFile = path.join(__dirname, '..', 'state', 'workspaces.json');
+    const stateFile = path.join(getDataDir(), 'workspaces.json');
     if (fs.existsSync(stateFile)) {
       fs.unlinkSync(stateFile);
       console.log('State cleared. Restart without --reset.');

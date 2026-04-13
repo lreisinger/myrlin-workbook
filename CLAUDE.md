@@ -100,3 +100,51 @@ This project uses the **Myrlin Workbook** design system. All UI/frontend work MU
 **Code standards**: `C:\Users\Arthur\.claude\skills\code-standards.md` - comments on every function, semantic versioning, changelog
 
 **Available design MCPs**: stitch (mockups), nanobanana (image gen), visual-qa (screenshots)
+
+## Mobile App Build - Orchestration Rules (NON-NEGOTIABLE)
+
+> These rules govern the Myrlin Mobile build process. Every session involved in mobile development MUST follow these.
+
+### Execution Model: Two-Tier Contract-Driven Orchestration
+
+- **Orchestrator** (main session): Holds the master plan, all contracts, all type definitions. Creates plans, spawns agents, verifies integration. Does NOT write feature code directly.
+- **Feature Agents** (subagents): Build individual features/screens to spec. Receive contracts + foundation code + their feature spec. Report back to orchestrator.
+- **NO middle management layer.** Never spawn a "manager" agent that spawns its own subagents. Two tiers only: orchestrator -> worker agents.
+
+### Agent Requirements (NON-NEGOTIABLE)
+
+- **ALL spawned agents MUST use `model: "opus"`** with extended/deep thinking. No exceptions, no cost optimization, no "this is simple enough for sonnet." Opus only.
+- ALL agent prompts MUST include: "Use your deepest reasoning for every decision. Think through edge cases, integration points, and failure modes before writing code."
+- ALL agents receive the shared contracts file (types, API shapes, navigation routes, theme tokens) plus their specific task spec.
+- ALL agents work in git worktrees for isolation.
+- Agents MUST commit their work before completing. Orchestrator merges.
+
+### Orchestrator Discipline
+
+The orchestrator:
+- **DOES:** Plan, define contracts, spawn agents, verify integration, merge branches, update plans, fix small integration glitches (< 20 lines)
+- **DOES NOT:** Write feature screens, implement components, write styles, build full features directly
+- **Exception:** Foundation phase may be built by orchestrator if the scope is small enough, OR by a single dedicated agent
+
+### Phase Gates
+
+1. Foundation phase MUST complete and be verified before any feature agents spawn
+2. Feature agents within the same phase MAY run in parallel (up to 3 concurrent)
+3. After each phase completes, orchestrator MUST verify integration before proceeding:
+   - Build succeeds with zero errors
+   - Navigation works between all screens
+   - Shared state connects properly
+   - Theme applies consistently
+   - No TypeScript errors
+4. If verification fails, orchestrator fixes integration issues or re-briefs affected agents
+
+### Contract-First Development
+
+- All TypeScript types, API interfaces, navigation routes, and component interfaces MUST be defined in the design doc BEFORE any agent writes code
+- Agents build to these contracts. If a contract is wrong, the orchestrator updates it and re-briefs affected agents.
+- Contracts live in shared files (`types/`, `api/`, `theme/`) that all agents import from
+- Any agent that needs to deviate from a contract MUST document why in their commit message
+
+### Mobile App Target: Full Parity
+
+The mobile app MUST replicate every feature of the web GUI. No features are "desktop only" unless physically impossible on mobile (e.g., multi-pane terminal grid becomes swipeable single-pane). Every interaction, every screen, every setting. The mobile app is not a companion; it is a complete client.
