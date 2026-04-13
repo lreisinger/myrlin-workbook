@@ -6218,6 +6218,32 @@ html.activity-indicators-disabled .terminal-pane-activity {
 }
 
 /* ── td issues in Tasks panel ───────────────────────── */
+.tasks-td-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--subtext0);
+  border-bottom: 1px solid var(--surface1);
+  margin-top: 4px;
+}
+
+.tasks-td-group-header:first-child { margin-top: 0; }
+
+.tasks-td-group-count {
+  background: var(--surface1);
+  color: var(--subtext0);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 9px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
 .tasks-td-row {
   display: flex;
   align-items: center;

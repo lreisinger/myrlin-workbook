@@ -4771,32 +4771,74 @@ class CWMApp {
       }
 
       panel.textContent = '';
+
+      // Group by status in display order
+      const STATUS_ORDER = ['in_progress', 'in_review', 'blocked', 'open'];
+      const STATUS_LABELS = {
+        in_progress: 'In Progress',
+        in_review: 'In Review',
+        blocked: 'Blocked',
+        open: 'Open',
+      };
+      const groups = {};
       for (const issue of issues) {
-        const row = document.createElement('div');
-        row.className = 'tasks-td-row';
+        const s = issue.status || 'open';
+        if (!groups[s]) groups[s] = [];
+        groups[s].push(issue);
+      }
 
-        const dot = document.createElement('span');
-        dot.className = 'td-status-dot ' + (issue.status || 'open');
+      // Sort each group by priority (P0 first)
+      const priorityRank = p => ({ P0: 0, P1: 1, P2: 2, P3: 3, P4: 4 })[p] ?? 5;
+      for (const s of Object.keys(groups)) {
+        groups[s].sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority));
+      }
 
-        const idEl = document.createElement('span');
-        idEl.className = 'td-issue-id';
-        idEl.textContent = issue.id;
+      const orderedStatuses = [
+        ...STATUS_ORDER.filter(s => groups[s]?.length),
+        ...Object.keys(groups).filter(s => !STATUS_ORDER.includes(s) && groups[s]?.length),
+      ];
 
-        const titleEl = document.createElement('span');
-        titleEl.className = 'td-issue-title';
-        titleEl.textContent = issue.title || issue.id;
+      for (const status of orderedStatuses) {
+        const groupIssues = groups[status];
 
-        row.append(dot, idEl, titleEl);
+        // Section header
+        const header = document.createElement('div');
+        header.className = 'tasks-td-group-header';
+        const label = document.createElement('span');
+        label.textContent = STATUS_LABELS[status] || status;
+        const count = document.createElement('span');
+        count.className = 'tasks-td-group-count';
+        count.textContent = groupIssues.length;
+        header.append(label, count);
+        panel.appendChild(header);
 
-        if (issue.priority) {
-          const pri = document.createElement('span');
-          pri.className = 'td-priority-badge priority-' + issue.priority.toLowerCase();
-          pri.textContent = issue.priority;
-          row.appendChild(pri);
+        for (const issue of groupIssues) {
+          const row = document.createElement('div');
+          row.className = 'tasks-td-row';
+
+          const dot = document.createElement('span');
+          dot.className = 'td-status-dot ' + status;
+
+          const idEl = document.createElement('span');
+          idEl.className = 'td-issue-id';
+          idEl.textContent = issue.id;
+
+          const titleEl = document.createElement('span');
+          titleEl.className = 'td-issue-title';
+          titleEl.textContent = issue.title || issue.id;
+
+          row.append(dot, idEl, titleEl);
+
+          if (issue.priority) {
+            const pri = document.createElement('span');
+            pri.className = 'td-priority-badge priority-' + issue.priority.toLowerCase();
+            pri.textContent = issue.priority;
+            row.appendChild(pri);
+          }
+
+          row.addEventListener('click', () => this.openTdIssueModal(issue.id));
+          panel.appendChild(row);
         }
-
-        row.addEventListener('click', () => this.openTdIssueModal(issue.id));
-        panel.appendChild(row);
       }
     } catch (err) {
       showPlaceholder('Failed to load td issues: ' + (err.message || 'unknown error'), true);
@@ -5042,8 +5084,8 @@ class CWMApp {
    */
   async _loadCodeMirror() {
     const [cmPkg, statePkg] = await Promise.all([
-      import('https://esm.sh/codemirror@6?bundle'),
-      import('https://esm.sh/@codemirror/state@6?bundle'),
+      import('https://esm.sh/codemirror@6'),
+      import('https://esm.sh/@codemirror/state@6'),
     ]);
     window.__cm = {
       basicSetup: cmPkg.basicSetup,
@@ -12104,6 +12146,16 @@ class CWMApp {
       const showText = details.raw || details.description || details.body || '';
       if (showText) {
         body.appendChild(this._makeTdModalSection('Details', showText));
+      }
+
+      // Log entries (progress, decisions, blockers)
+      if (Array.isArray(details.logs) && details.logs.length > 0) {
+        const logLines = details.logs.map(l => {
+          const ts = l.timestamp ? new Date(l.timestamp).toLocaleString() : '';
+          const tag = l.type && l.type !== 'progress' ? `[${l.type}] ` : '';
+          return ts ? `${ts}  ${tag}${l.message}` : `${tag}${l.message}`;
+        }).join('\n\n');
+        body.appendChild(this._makeTdModalSection('Log', logLines));
       }
     }
 

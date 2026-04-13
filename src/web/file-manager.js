@@ -95,7 +95,7 @@ async function getTree(workingDir, subpath = '') {
 /**
  * GET /api/files/content
  * Returns file content as UTF-8 text with a language hint for CodeMirror.
- * Rejects files larger than 1MB.
+ * Rejects files larger than 5MB.
  *
  * @param {string} workingDir - Workspace root directory
  * @param {string} file - Relative path to the file
@@ -107,7 +107,7 @@ async function getContent(workingDir, file) {
   const target = validatePath(root, file);
 
   const stat = await fs.promises.stat(target);
-  if (stat.size > 1024 * 1024) throw new Error('File too large (> 1MB)');
+  if (stat.size > 5 * 1024 * 1024) throw new Error('File too large (> 5MB)');
 
   const content = await fs.promises.readFile(target, 'utf8');
   const ext = path.extname(file).slice(1).toLowerCase();

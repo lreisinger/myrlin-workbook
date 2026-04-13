@@ -5779,7 +5779,10 @@ async function gitRepoRoot(dir) {
 }
 
 app.get('/api/git/status', requireAuth, async (req, res) => {
-  const dir = req.query.dir;
+  let dir = req.query.dir;
+  if (!dir && req.query.workspaceId) {
+    dir = resolveWorkspaceDir(getStore(), req.query.workspaceId);
+  }
   if (!dir) return res.status(400).json({ error: 'dir query parameter required' });
 
   // Return cached result if fresh enough
@@ -5831,7 +5834,10 @@ app.get('/api/git/status', requireAuth, async (req, res) => {
 });
 
 app.get('/api/git/branches', requireAuth, async (req, res) => {
-  const dir = req.query.dir;
+  let dir = req.query.dir;
+  if (!dir && req.query.workspaceId) {
+    dir = resolveWorkspaceDir(getStore(), req.query.workspaceId);
+  }
   if (!dir) return res.status(400).json({ error: 'dir query parameter required' });
   try {
     const root = await gitRepoRoot(dir);
@@ -7675,30 +7681,11 @@ app.get('/api/browse', requireAuth, (req, res) => {
   res.json({ currentPath: targetPath, parent: hasParent ? parent : null, entries });
 });
 
-// ── Git API endpoints ──────────────────────────────────────────────────────────
+// ── Git API endpoints (log + diff) ────────────────────────────────────────────
+// Note: /api/git/status and /api/git/branches are registered earlier in the file
+// (upstream routes) and now also accept workspaceId via resolveWorkspaceDir().
 
-/**
- * GET /api/git/status
- * Returns the current git status for a workspace's working directory.
- * Includes branch name, staged, modified, untracked, and deleted files.
- *
- * @query {string} workspaceId - The workspace ID to get git status for
- * @returns {{ branch, staged, modified, notAdded, deleted, isClean }}
- */
 const gitManager = require('./git-manager');
-
-app.get('/api/git/status', requireAuth, async (req, res) => {
-  try {
-    const { workspaceId } = req.query;
-    const store = getStore();
-    const ws = store.getWorkspace(workspaceId);
-    if (!ws) return res.status(404).json({ error: 'Workspace not found' });
-    const status = await gitManager.getStatus(ws.workingDir);
-    res.json(status);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 /**
  * GET /api/git/log
@@ -7712,9 +7699,12 @@ app.get('/api/git/log', requireAuth, async (req, res) => {
   try {
     const { workspaceId, limit } = req.query;
     const store = getStore();
+    if (!workspaceId) return res.status(400).json({ error: 'workspaceId required' });
     const ws = store.getWorkspace(workspaceId);
     if (!ws) return res.status(404).json({ error: 'Workspace not found' });
-    const log = await gitManager.getLog(ws.workingDir, limit);
+    const workingDir = resolveWorkspaceDir(store, workspaceId);
+    if (!workingDir) return res.status(400).json({ error: 'Workspace has no sessions with a working directory' });
+    const log = await gitManager.getLog(workingDir, limit);
     res.json({ commits: log });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -7734,34 +7724,18 @@ app.get('/api/git/diff', requireAuth, async (req, res) => {
   try {
     const { workspaceId, file, staged } = req.query;
     const store = getStore();
+    if (!workspaceId) return res.status(400).json({ error: 'workspaceId required' });
     const ws = store.getWorkspace(workspaceId);
     if (!ws) return res.status(404).json({ error: 'Workspace not found' });
-    const diff = await gitManager.getDiff(ws.workingDir, file, staged === 'true');
+    const workingDir = resolveWorkspaceDir(store, workspaceId);
+    if (!workingDir) return res.status(400).json({ error: 'Workspace has no sessions with a working directory' });
+    const diff = await gitManager.getDiff(workingDir, file, staged === 'true');
     res.json({ diff });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-/**
- * GET /api/git/branches
- * Returns branch information for a workspace's working directory.
- *
- * @query {string} workspaceId - The workspace ID
- * @returns {{ current: string, all: string[] }}
- */
-app.get('/api/git/branches', requireAuth, async (req, res) => {
-  try {
-    const { workspaceId } = req.query;
-    const store = getStore();
-    const ws = store.getWorkspace(workspaceId);
-    if (!ws) return res.status(404).json({ error: 'Workspace not found' });
-    const branches = await gitManager.getBranches(ws.workingDir);
-    res.json(branches);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // ──────────────────────────────────────────────────────────
 //  EXPRESS ERROR MIDDLEWARE
