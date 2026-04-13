@@ -7737,6 +7737,31 @@ app.get('/api/git/diff', requireAuth, async (req, res) => {
 });
 
 
+/**
+ * GET /api/git/commit-diff
+ * Returns the full patch output (git show) for a specific commit.
+ *
+ * @query {string} workspaceId - The workspace ID
+ * @query {string} hash - Commit hash (full or short, 4-40 hex chars)
+ * @returns {{ diff: string }}
+ */
+app.get('/api/git/commit-diff', requireAuth, async (req, res) => {
+  try {
+    const { workspaceId, hash } = req.query;
+    const store = getStore();
+    if (!workspaceId) return res.status(400).json({ error: 'workspaceId required' });
+    if (!hash) return res.status(400).json({ error: 'hash required' });
+    const ws = store.getWorkspace(workspaceId);
+    if (!ws) return res.status(404).json({ error: 'Workspace not found' });
+    const workingDir = resolveWorkspaceDir(store, workspaceId);
+    if (!workingDir) return res.status(400).json({ error: 'Workspace has no sessions with a working directory' });
+    const diff = await gitManager.getCommitDiff(workingDir, hash);
+    res.json({ diff });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ──────────────────────────────────────────────────────────
 //  EXPRESS ERROR MIDDLEWARE
 // ──────────────────────────────────────────────────────────

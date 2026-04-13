@@ -2166,6 +2166,22 @@ class CWMApp {
       await this.loadSessions();
     }
 
+    // If the tasks tab is open, refresh whichever sub-tab is active for the new workspace
+    if (this.state.viewMode === 'tasks' && this._activeTasksTab) {
+      // Reset git selection so the right pane doesn't show stale data from old workspace
+      this._selectedGitCommit = null;
+      this._selectedGitFile = null;
+      // Force files panel to re-init for the new workspace
+      const filesPanel = document.getElementById('tasks-files-panel');
+      if (filesPanel) delete filesPanel._wsId;
+      // Re-render the active tab
+      const tab = this._activeTasksTab;
+      if (tab === 'worktree') this.renderTasksView();
+      else if (tab === 'td') this.renderTasksTdPanel();
+      else if (tab === 'git') this.renderTasksGitPanel();
+      else if (tab === 'files') this.renderTasksFilesPanel();
+    }
+
     // Close mobile sidebar
     if (this.state.sidebarOpen) this.toggleSidebar();
   }
@@ -4841,7 +4857,41 @@ class CWMApp {
         }
       }
     } catch (err) {
-      showPlaceholder('Failed to load td issues: ' + (err.message || 'unknown error'), true);
+      const msg = err.message || 'unknown error';
+      if (msg.includes('not initialized')) {
+        // td isn't initialized — show a helpful prompt rather than a raw error
+        panel.textContent = '';
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:12px;padding:32px 24px;';
+        const info = document.createElement('div');
+        info.className = 'tasks-placeholder';
+        info.style.position = 'static';
+        info.textContent = 'td is not initialized for this project.';
+        const hint = document.createElement('div');
+        hint.style.cssText = 'font-size:12px;color:var(--subtext0);text-align:center;';
+        hint.textContent = 'Run td init in the project root to enable task tracking. If this repo uses a git worktree, td should be initialized in the main repo.';
+        const initBtn = document.createElement('button');
+        initBtn.className = 'btn btn-primary btn-sm';
+        initBtn.textContent = 'Run td init';
+        initBtn.addEventListener('click', async () => {
+          initBtn.disabled = true;
+          initBtn.textContent = 'Initializing\u2026';
+          try {
+            await this.api('POST', `/api/workspaces/${ws.id}/td/init`, {});
+            this.renderTasksTdPanel();
+          } catch (e) {
+            initBtn.disabled = false;
+            initBtn.textContent = 'Run td init';
+            info.textContent = 'td init failed: ' + (e.message || 'unknown error');
+          }
+        });
+        wrap.appendChild(info);
+        wrap.appendChild(hint);
+        wrap.appendChild(initBtn);
+        panel.appendChild(wrap);
+      } else {
+        showPlaceholder('Failed to load td issues: ' + msg, true);
+      }
     }
   }
 
@@ -5080,19 +5130,31 @@ class CWMApp {
   }
 
   /**
-   * Dynamically import CodeMirror 6 from esm.sh CDN, caching on window.__cm.
+   * Load CodeMirror 6 from the locally-served vendor bundle.
+   * The bundle is a self-contained ESM file built by esbuild so no CDN access is needed.
+   * Uses a <script type="module"> tag to get a module context for the dynamic import.
    */
-  async _loadCodeMirror() {
-    const [cmPkg, statePkg] = await Promise.all([
-      import('https://esm.sh/codemirror@6'),
-      import('https://esm.sh/@codemirror/state@6'),
-    ]);
-    window.__cm = {
-      basicSetup: cmPkg.basicSetup,
-      EditorView: cmPkg.EditorView,
-      EditorState: statePkg.EditorState || cmPkg.EditorState,
-    };
-    window.__cmLoaded = true;
+  _loadCodeMirror() {
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.type = 'module';
+      const eventName = '__cm_loaded_' + Date.now();
+      script.textContent = [
+        "(async () => {",
+        "  try {",
+        "    const { basicSetup, EditorView, EditorState } = await import('/vendor/codemirror.bundle.js');",
+        "    window.__cm = { basicSetup, EditorView, EditorState };",
+        "    window.__cmLoaded = true;",
+        `    document.dispatchEvent(new Event('${eventName}'));`,
+        "  } catch(e) {",
+        `    document.dispatchEvent(new CustomEvent('${eventName}_err', { detail: (e && e.message) || String(e) }));`,
+        "  }",
+        "})();",
+      ].join('\n');
+      document.addEventListener(eventName, resolve, { once: true });
+      document.addEventListener(eventName + '_err', (e) => reject(new Error(e.detail || 'CodeMirror failed to load')), { once: true });
+      document.head.appendChild(script);
+    });
   }
 
   /**
@@ -5208,13 +5270,25 @@ class CWMApp {
       left.className = 'git-panel-left';
       left.id = 'git-status-list';
 
-      const right = document.createElement('div');
+      // On auto-refresh, preserve the existing right pane so the visible diff
+      // isn't wiped while the user is reading it. Clone children via DOM (no innerHTML).
+      const existingRight = document.getElementById('git-diff-viewer');
+      const hasContent = existingRight &&
+        existingRight.children.length &&
+        !existingRight.querySelector('.tasks-placeholder');
+
+      const right = hasContent
+        ? existingRight.cloneNode(true)
+        : document.createElement('div');
       right.className = 'git-panel-right';
       right.id = 'git-diff-viewer';
-      const diffPlaceholder = document.createElement('div');
-      diffPlaceholder.className = 'tasks-placeholder';
-      diffPlaceholder.textContent = 'Select a file to view diff';
-      right.appendChild(diffPlaceholder);
+
+      if (!hasContent) {
+        const diffPlaceholder = document.createElement('div');
+        diffPlaceholder.className = 'tasks-placeholder';
+        diffPlaceholder.textContent = 'Select a file or commit to view diff';
+        right.appendChild(diffPlaceholder);
+      }
 
       panel.appendChild(container);
       container.appendChild(left);
@@ -5276,6 +5350,8 @@ class CWMApp {
             row.addEventListener('click', () => {
               left.querySelectorAll('.git-file-row').forEach(r => r.classList.remove('active'));
               row.classList.add('active');
+              this._selectedGitFile = { file: filename, staged: group.staged };
+              this._selectedGitCommit = null; // clear commit selection
               this._loadGitDiff(right, ws.id, filename, group.staged);
             });
 
@@ -5285,7 +5361,7 @@ class CWMApp {
       }
 
       // Commit log section appended below file status
-      await this._renderGitLog(left, ws.id);
+      await this._renderGitLog(left, right, ws.id);
 
     } catch (err) {
       panel.textContent = '';
@@ -5356,11 +5432,13 @@ class CWMApp {
 
   /**
    * Render the recent commit log section inside the left panel.
-   * Commits show hash (click to copy), message, and relative timestamp.
+   * Clicking a row shows the full commit diff in the right pane.
+   * Clicking the hash badge copies the full hash to clipboard.
    * @param {HTMLElement} container - The left pane to append the log into
+   * @param {HTMLElement} right - The right diff-viewer pane
    * @param {string} workspaceId - Workspace ID for the API call
    */
-  async _renderGitLog(container, workspaceId) {
+  async _renderGitLog(container, right, workspaceId) {
     const logSection = document.createElement('div');
     logSection.className = 'git-log-section';
 
@@ -5385,12 +5463,15 @@ class CWMApp {
       for (const commit of commits) {
         const row = document.createElement('div');
         row.className = 'git-commit-row';
+        row.title = 'Click to view commit diff';
+        row.style.cursor = 'pointer';
 
         const hash = document.createElement('span');
         hash.className = 'git-commit-hash';
         hash.textContent = commit.shortHash;
         hash.title = 'Click to copy full hash';
-        hash.addEventListener('click', () => {
+        hash.addEventListener('click', (e) => {
+          e.stopPropagation(); // don't also trigger row click
           navigator.clipboard.writeText(commit.hash).catch(() => {});
           hash.textContent = 'copied!';
           setTimeout(() => { hash.textContent = commit.shortHash; }, 1500);
@@ -5408,12 +5489,83 @@ class CWMApp {
         row.appendChild(msg);
         row.appendChild(meta);
         logSection.appendChild(row);
+
+        // Restore selection state after auto-refresh
+        if (this._selectedGitCommit === commit.hash) {
+          row.classList.add('selected');
+        }
+
+        // Row click: show full commit diff in the right pane
+        row.addEventListener('click', () => {
+          logSection.querySelectorAll('.git-commit-row').forEach(r => r.classList.remove('selected'));
+          row.classList.add('selected');
+          this._selectedGitCommit = commit.hash;
+          this._selectedGitFile = null; // clear file selection
+          this._loadGitCommitDiff(right, workspaceId, commit.hash);
+        });
       }
     } catch (err) {
       const errEl = document.createElement('div');
       errEl.className = 'tasks-placeholder tasks-placeholder--error';
       errEl.textContent = 'Failed to load commits: ' + (err.message || 'unknown');
       logSection.appendChild(errEl);
+    }
+  }
+
+  /**
+   * Load and render the full diff for a commit (git show) into the diff viewer.
+   * @param {HTMLElement} container - The right pane to render into
+   * @param {string} workspaceId - Workspace ID for the API call
+   * @param {string} hash - Full commit hash
+   */
+  async _loadGitCommitDiff(container, workspaceId, hash) {
+    container.textContent = '';
+    const loadingEl = document.createElement('div');
+    loadingEl.className = 'tasks-placeholder';
+    loadingEl.textContent = 'Loading commit\u2026';
+    container.appendChild(loadingEl);
+
+    try {
+      const data = await this.api('GET', `/api/git/commit-diff?workspaceId=${workspaceId}&hash=${encodeURIComponent(hash)}`);
+      const diffText = data.diff || '';
+
+      if (!diffText.trim()) {
+        container.textContent = '';
+        const empty = document.createElement('div');
+        empty.className = 'tasks-placeholder';
+        empty.textContent = 'No diff available for this commit';
+        container.appendChild(empty);
+        return;
+      }
+
+      container.textContent = '';
+      const pre = document.createElement('pre');
+      pre.className = 'git-diff-viewer';
+
+      const lines = diffText.split('\n');
+      for (const line of lines) {
+        const span = document.createElement('span');
+        span.textContent = line + '\n';
+        if (line.startsWith('+') && !line.startsWith('+++')) {
+          span.className = 'diff-add';
+        } else if (line.startsWith('-') && !line.startsWith('---')) {
+          span.className = 'diff-del';
+        } else if (line.startsWith('@@')) {
+          span.className = 'diff-hunk';
+        } else if (line.startsWith('commit ') || line.startsWith('Author:') || line.startsWith('Date:')) {
+          span.className = 'diff-meta';
+        } else {
+          span.className = 'diff-ctx';
+        }
+        pre.appendChild(span);
+      }
+      container.appendChild(pre);
+    } catch (err) {
+      container.textContent = '';
+      const errEl = document.createElement('div');
+      errEl.className = 'tasks-placeholder tasks-placeholder--error';
+      errEl.textContent = 'Failed to load commit: ' + (err.message || 'unknown');
+      container.appendChild(errEl);
     }
   }
 

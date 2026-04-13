@@ -97,4 +97,19 @@ async function getBranches(workingDir) {
   };
 }
 
-module.exports = { getStatus, getLog, getDiff, getBranches };
+/**
+ * Get the full diff output for a specific commit (git show).
+ * @param {string} workingDir - Workspace root directory
+ * @param {string} hash - Full or short commit hash
+ * @returns {Promise<string>} The unified diff/show output
+ */
+async function getCommitDiff(workingDir, hash) {
+  if (!hash || !/^[0-9a-f]{4,40}$/i.test(hash)) {
+    throw new Error('Invalid commit hash');
+  }
+  const git = simpleGit(resolveGitDir(workingDir));
+  const output = await git.show([hash, '--stat', '--patch']);
+  return output || '';
+}
+
+module.exports = { getStatus, getLog, getDiff, getBranches, getCommitDiff };

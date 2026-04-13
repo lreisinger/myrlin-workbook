@@ -9609,6 +9609,7 @@ html {
 .diff-del  { color: var(--red);   display: block; }
 .diff-hunk { color: var(--blue);  display: block; }
 .diff-ctx  { color: var(--subtext0); display: block; }
+.diff-meta { color: var(--text); display: block; font-weight: 500; }
 
 /* ── Commit log ─────────────────────────────────────── */
 .git-log-section {
@@ -9622,7 +9623,10 @@ html {
   padding: 6px 12px;
   font-size: 12px;
   border-bottom: 1px solid var(--surface0);
+  transition: background 0.1s;
 }
+.git-commit-row:hover { background: var(--surface0); }
+.git-commit-row.selected { background: var(--surface1); }
 
 .git-commit-hash {
   font-family: var(--font-mono, monospace);
