@@ -494,7 +494,7 @@ app.get('/api/workspaces/:id', requireAuth, (req, res) => {
  * Body: { name, description?, color? }
  */
 app.post('/api/workspaces', requireAuth, (req, res) => {
-  const { name, description, color } = req.body || {};
+  const { name, description, color, icon } = req.body || {};
 
   if (!name || typeof name !== 'string' || name.trim().length === 0) {
     return res.status(400).json({ error: 'Workspace name is required.' });
@@ -508,6 +508,7 @@ app.post('/api/workspaces', requireAuth, (req, res) => {
     name: name.trim(),
     description: description || '',
     color: color || 'cyan',
+    icon: icon || null,
   });
 
   return res.status(201).json({ workspace });
