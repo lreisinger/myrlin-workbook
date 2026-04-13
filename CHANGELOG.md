@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.26] - 2026-04-13
+
+### Added
+
+- **Tasks view with 4 sub-tabs** - New top-level "Tasks" tab with dedicated panels for Worktree Tasks (kanban board), td issues (status-grouped with detail modal and logs), Git (branch indicator, file status with inline diffs, commit log with full git-show viewer), and Files (two-pane explorer + CodeMirror 6 editor with syntax highlighting and atomic save). Switching projects in the sidebar immediately refreshes the active sub-tab. (PR #43 by @croakingtoad)
+- **Git commit diff viewer** - Click any commit in the Git tab log to see full stat + patch output. 10-second auto-refresh preserves the diff pane.
+- **Local CodeMirror bundle** - CodeMirror 6 served from vendor bundle instead of CDN, fixing failures for users without direct internet access.
+- **td "not initialized" state** - Friendly message with "Run td init" button instead of cryptic error string.
+
+### Fixed
+
+- Git endpoints now resolve `workspaceId` via `resolveWorkspaceDir()` instead of failing with "dir parameter required"
+- Removed duplicate route registrations that shadowed fixed endpoints
+- Sidebar project switching now refreshes the active Tasks sub-tab
+
 ## [0.9.25] - 2026-04-10
 
 ### Fixed
