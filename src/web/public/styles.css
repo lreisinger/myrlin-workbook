@@ -5683,17 +5683,20 @@ html.activity-indicators-disabled .terminal-pane-activity {
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
+  overflow: hidden;
   padding: 0;
 }
 
 .tasks-panel-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
+  flex-direction: column;
+  padding: 0;
   flex-shrink: 0;
+}
+
+.tasks-panel-header .tasks-header-actions {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
 }
 
 .tasks-panel-header h3 {
@@ -6146,6 +6149,128 @@ html.activity-indicators-disabled .terminal-pane-activity {
   opacity: 0.6;
   min-height: 40px;
 }
+
+/* ── Tasks sub-navigation ────────────────────────────── */
+.tasks-tab-strip {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0;
+  border-bottom: 1px solid var(--surface1);
+  flex-shrink: 0;
+}
+
+.tasks-tab {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--subtext0);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+  margin-bottom: -1px;
+}
+
+.tasks-tab:hover {
+  color: var(--text);
+  background: var(--surface0);
+}
+
+.tasks-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--blue);
+}
+
+/* ── Tasks tab panels ────────────────────────────────── */
+.tasks-tab-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tasks-tab-panel[hidden] { display: none; }
+
+.tasks-inner-panel {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* ── Placeholder / empty states ──────────────────────── */
+.tasks-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 120px;
+  color: var(--overlay0);
+  font-size: 13px;
+  text-align: center;
+  padding: 16px;
+}
+
+.tasks-placeholder--error {
+  color: var(--red);
+}
+
+/* ── td issues in Tasks panel ───────────────────────── */
+.tasks-td-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--subtext0);
+  border-bottom: 1px solid var(--surface1);
+  margin-top: 4px;
+}
+
+.tasks-td-group-header:first-child { margin-top: 0; }
+
+.tasks-td-group-count {
+  background: var(--surface1);
+  color: var(--subtext0);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 9px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.tasks-td-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--surface1);
+  font-size: 13px;
+  transition: background 0.1s;
+}
+
+.tasks-td-row:hover { background: var(--surface0); }
+
+.td-priority-badge {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--surface1);
+  color: var(--subtext0);
+  flex-shrink: 0;
+}
+
+.td-priority-badge.priority-p0 { background: var(--red);    color: var(--base); }
+.td-priority-badge.priority-p1 { background: var(--peach);  color: var(--base); }
+.td-priority-badge.priority-p2 { background: var(--yellow); color: var(--base); }
+.td-priority-badge.priority-p3 { background: var(--surface2); color: var(--text); }
 
 /* ─── New Task Dialog form elements ──────────────────── */
 .form-group {
@@ -9384,4 +9509,255 @@ html {
 .device-actions .btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* ── Git Tab ─────────────────────────────────────────── */
+.git-panel-container {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.git-panel-left {
+  width: 260px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--surface1);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.git-panel-right {
+  flex: 1;
+  overflow: auto;
+  min-width: 0;
+}
+
+.git-branch-bar {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--subtext0);
+  border-bottom: 1px solid var(--surface1);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.git-branch-name {
+  color: var(--green);
+  font-weight: 500;
+}
+
+.git-group-header {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--subtext0);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--surface0);
+  border-bottom: 1px solid var(--surface1);
+}
+
+.git-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  border-bottom: 1px solid var(--surface0);
+  transition: background 0.1s;
+}
+
+.git-file-row:hover { background: var(--surface0); }
+.git-file-row.active { background: var(--surface1); }
+
+.git-file-state {
+  font-size: 10px;
+  font-weight: 700;
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.git-state-staged   { color: var(--green); }
+.git-state-modified { color: var(--yellow); }
+.git-state-untracked { color: var(--blue); }
+.git-state-deleted  { color: var(--red); }
+
+.git-file-name {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-diff-viewer {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  white-space: pre;
+  tab-size: 4;
+}
+
+.diff-add  { color: var(--green); display: block; }
+.diff-del  { color: var(--red);   display: block; }
+.diff-hunk { color: var(--blue);  display: block; }
+.diff-ctx  { color: var(--subtext0); display: block; }
+.diff-meta { color: var(--text); display: block; font-weight: 500; }
+
+/* ── Commit log ─────────────────────────────────────── */
+.git-log-section {
+  margin-top: 8px;
+}
+
+.git-commit-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--surface0);
+  transition: background 0.1s;
+}
+.git-commit-row:hover { background: var(--surface0); }
+.git-commit-row.selected { background: var(--surface1); }
+
+.git-commit-hash {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--blue);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.git-commit-hash:hover { text-decoration: underline; }
+
+.git-commit-msg {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.git-commit-meta {
+  font-size: 11px;
+  color: var(--subtext0);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* ── Files Tab ────────────────────────────────────────────────────────── */
+.files-container {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.files-sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--surface1);
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+.files-editor-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.files-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+  transition: background 0.1s;
+}
+
+.files-tree-row:hover { background: var(--surface0); }
+.files-tree-row.active { background: var(--surface1); }
+
+.files-tree-icon {
+  font-size: 8px;
+  color: var(--subtext0);
+  width: 10px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.files-tree-name {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.files-tree-file .files-tree-name { color: var(--text); }
+.files-tree-dir .files-tree-name { color: var(--blue); font-weight: 500; }
+
+.files-tree-children {
+  padding-left: 16px;
+}
+
+.files-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--surface1);
+  flex-shrink: 0;
+  background: var(--surface0);
+}
+
+.files-editor-filename {
+  font-size: 12px;
+  color: var(--text);
+  font-family: var(--font-mono, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.files-save-btn {
+  padding: 4px 12px;
+  font-size: 12px;
+  background: var(--surface1);
+  color: var(--text);
+  border: 1px solid var(--surface2);
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.1s;
+}
+
+.files-save-btn:hover:not(:disabled) { background: var(--surface2); }
+.files-save-btn:disabled { opacity: 0.5; cursor: default; }
+.files-save-btn.dirty { background: var(--blue); color: var(--base); border-color: var(--blue); }
+
+.files-cm-container {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+
+.files-cm-container .cm-editor {
+  height: 100%;
+  font-size: 13px;
+}
+
+.files-cm-container .cm-scroller {
+  overflow: auto;
 }

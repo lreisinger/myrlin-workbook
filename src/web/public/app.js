@@ -1028,6 +1028,13 @@ class CWMApp {
         e.preventDefault();
         if (this.state.token && this.state.settings.enableWorktreeTasks) this.openNewTaskDialog();
       }
+      // Ctrl+S / Cmd+S - Save current file (Files tab only)
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        if (this._activeTasksTab === 'files' && this._filesEditorCurrentFile) {
+          e.preventDefault();
+          this._saveCurrentFile();
+        }
+      }
       // Escape
       if (e.key === 'Escape') {
         if (this.els.diffViewerOverlay && !this.els.diffViewerOverlay.hidden) {
@@ -2157,6 +2164,22 @@ class CWMApp {
 
     if (this.state.viewMode === 'workspace') {
       await this.loadSessions();
+    }
+
+    // If the tasks tab is open, refresh whichever sub-tab is active for the new workspace
+    if (this.state.viewMode === 'tasks' && this._activeTasksTab) {
+      // Reset git selection so the right pane doesn't show stale data from old workspace
+      this._selectedGitCommit = null;
+      this._selectedGitFile = null;
+      // Force files panel to re-init for the new workspace
+      const filesPanel = document.getElementById('tasks-files-panel');
+      if (filesPanel) delete filesPanel._wsId;
+      // Re-render the active tab
+      const tab = this._activeTasksTab;
+      if (tab === 'worktree') this.renderTasksView();
+      else if (tab === 'td') this.renderTasksTdPanel();
+      else if (tab === 'git') this.renderTasksGitPanel();
+      else if (tab === 'files') this.renderTasksFilesPanel();
     }
 
     // Close mobile sidebar
@@ -4661,6 +4684,529 @@ class CWMApp {
     }
   }
 
+  _initTasksTabs() {
+    const strip = document.getElementById('tasks-tab-strip');
+    if (!strip || strip._tabsWired) return;
+    strip._tabsWired = true;
+
+    // Show td tab only when enableTd is on
+    const tdTab = document.getElementById('tasks-tab-td');
+    if (tdTab) tdTab.hidden = !this.getSetting('enableTd');
+
+    strip.addEventListener('click', e => {
+      const tab = e.target.closest('.tasks-tab');
+      if (!tab) return;
+      const name = tab.dataset.tasksTab;
+      this._switchTasksTab(name);
+    });
+
+    // Restore persisted tab
+    const saved = localStorage.getItem('cwm_tasksTab') || 'worktree';
+    this._switchTasksTab(saved);
+  }
+
+  _switchTasksTab(name) {
+    const strip = document.getElementById('tasks-tab-strip');
+    if (!strip) return;
+
+    // Guard: prompt before leaving files tab with unsaved changes
+    if (this._activeTasksTab === 'files' && name !== 'files' && this._filesEditorDirty) {
+      const ok = window.confirm('Unsaved changes in ' + this._filesEditorCurrentFile + '. Discard?');
+      if (!ok) return;
+      this._filesEditorDirty = false;
+    }
+
+    // Update tab buttons
+    strip.querySelectorAll('.tasks-tab').forEach(t => {
+      const active = t.dataset.tasksTab === name;
+      t.classList.toggle('active', active);
+      t.setAttribute('aria-selected', active);
+    });
+
+    // Show/hide panels
+    document.querySelectorAll('.tasks-tab-panel').forEach(p => {
+      p.hidden = p.dataset.tasksTab !== name;
+    });
+
+    // Show worktree header controls only on worktree tab
+    const headerActions = document.querySelector('.tasks-header-actions');
+    if (headerActions) headerActions.hidden = name !== 'worktree';
+
+    localStorage.setItem('cwm_tasksTab', name);
+    this._activeTasksTab = name;
+
+    // Trigger data load for the active tab
+    if (name === 'worktree') this.renderTasksView();
+    if (name === 'td') this.renderTasksTdPanel();
+    if (name === 'git') {
+      this.renderTasksGitPanel();
+      // Start auto-refresh every 10 seconds while git tab is active
+      if (this._gitRefreshTimer) clearInterval(this._gitRefreshTimer);
+      this._gitRefreshTimer = setInterval(() => {
+        if (this._activeTasksTab === 'git') this.renderTasksGitPanel();
+      }, 10000);
+    } else {
+      // Clear git refresh timer when switching away from git tab
+      if (this._gitRefreshTimer) {
+        clearInterval(this._gitRefreshTimer);
+        this._gitRefreshTimer = null;
+      }
+    }
+    if (name === 'files') this.renderTasksFilesPanel();
+  }
+
+  async renderTasksTdPanel() {
+    const panel = document.getElementById('tasks-td-panel');
+    if (!panel) return;
+    if (!this.getSetting('enableTd')) return;
+
+    const ws = this.state.activeWorkspace;
+
+    const showPlaceholder = (msg, isError) => {
+      panel.textContent = '';
+      const el = document.createElement('div');
+      el.className = isError ? 'tasks-placeholder tasks-placeholder--error' : 'tasks-placeholder';
+      el.textContent = msg;
+      panel.appendChild(el);
+    };
+
+    if (!ws) {
+      showPlaceholder('No active project selected', false);
+      return;
+    }
+
+    showPlaceholder('Loading td issues\u2026', false);
+
+    try {
+      const data = await this.api('GET', `/api/workspaces/${ws.id}/td/issues`);
+      const issues = data.issues || [];
+
+      if (issues.length === 0) {
+        showPlaceholder('No open td issues for this project', false);
+        return;
+      }
+
+      panel.textContent = '';
+
+      // Group by status in display order
+      const STATUS_ORDER = ['in_progress', 'in_review', 'blocked', 'open'];
+      const STATUS_LABELS = {
+        in_progress: 'In Progress',
+        in_review: 'In Review',
+        blocked: 'Blocked',
+        open: 'Open',
+      };
+      const groups = {};
+      for (const issue of issues) {
+        const s = issue.status || 'open';
+        if (!groups[s]) groups[s] = [];
+        groups[s].push(issue);
+      }
+
+      // Sort each group by priority (P0 first)
+      const priorityRank = p => ({ P0: 0, P1: 1, P2: 2, P3: 3, P4: 4 })[p] ?? 5;
+      for (const s of Object.keys(groups)) {
+        groups[s].sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority));
+      }
+
+      const orderedStatuses = [
+        ...STATUS_ORDER.filter(s => groups[s]?.length),
+        ...Object.keys(groups).filter(s => !STATUS_ORDER.includes(s) && groups[s]?.length),
+      ];
+
+      for (const status of orderedStatuses) {
+        const groupIssues = groups[status];
+
+        // Section header
+        const header = document.createElement('div');
+        header.className = 'tasks-td-group-header';
+        const label = document.createElement('span');
+        label.textContent = STATUS_LABELS[status] || status;
+        const count = document.createElement('span');
+        count.className = 'tasks-td-group-count';
+        count.textContent = groupIssues.length;
+        header.append(label, count);
+        panel.appendChild(header);
+
+        for (const issue of groupIssues) {
+          const row = document.createElement('div');
+          row.className = 'tasks-td-row';
+
+          const dot = document.createElement('span');
+          dot.className = 'td-status-dot ' + status;
+
+          const idEl = document.createElement('span');
+          idEl.className = 'td-issue-id';
+          idEl.textContent = issue.id;
+
+          const titleEl = document.createElement('span');
+          titleEl.className = 'td-issue-title';
+          titleEl.textContent = issue.title || issue.id;
+
+          row.append(dot, idEl, titleEl);
+
+          if (issue.priority) {
+            const pri = document.createElement('span');
+            pri.className = 'td-priority-badge priority-' + issue.priority.toLowerCase();
+            pri.textContent = issue.priority;
+            row.appendChild(pri);
+          }
+
+          row.addEventListener('click', () => this.openTdIssueModal(issue.id));
+          panel.appendChild(row);
+        }
+      }
+    } catch (err) {
+      const msg = err.message || 'unknown error';
+      if (msg.includes('not initialized')) {
+        // td isn't initialized — show a helpful prompt rather than a raw error
+        panel.textContent = '';
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:12px;padding:32px 24px;';
+        const info = document.createElement('div');
+        info.className = 'tasks-placeholder';
+        info.style.position = 'static';
+        info.textContent = 'td is not initialized for this project.';
+        const hint = document.createElement('div');
+        hint.style.cssText = 'font-size:12px;color:var(--subtext0);text-align:center;';
+        hint.textContent = 'Run td init in the project root to enable task tracking. If this repo uses a git worktree, td should be initialized in the main repo.';
+        const initBtn = document.createElement('button');
+        initBtn.className = 'btn btn-primary btn-sm';
+        initBtn.textContent = 'Run td init';
+        initBtn.addEventListener('click', async () => {
+          initBtn.disabled = true;
+          initBtn.textContent = 'Initializing\u2026';
+          try {
+            await this.api('POST', `/api/workspaces/${ws.id}/td/init`, {});
+            this.renderTasksTdPanel();
+          } catch (e) {
+            initBtn.disabled = false;
+            initBtn.textContent = 'Run td init';
+            info.textContent = 'td init failed: ' + (e.message || 'unknown error');
+          }
+        });
+        wrap.appendChild(info);
+        wrap.appendChild(hint);
+        wrap.appendChild(initBtn);
+        panel.appendChild(wrap);
+      } else {
+        showPlaceholder('Failed to load td issues: ' + msg, true);
+      }
+    }
+  }
+
+  // ── Files Tab ─────────────────────────────────────────────────────────────
+
+  /**
+   * Render the Files tab panel for the currently active workspace.
+   * Builds a two-pane layout: file tree sidebar on left, editor pane on right.
+   * Skips re-initialization if already rendered for the same workspace.
+   */
+  async renderTasksFilesPanel() {
+    const panel = document.getElementById('tasks-files-panel');
+    if (!panel) return;
+
+    const ws = this.state.activeWorkspace;
+    if (!ws) {
+      panel.replaceChildren();
+      const placeholder = document.createElement('div');
+      placeholder.className = 'tasks-placeholder';
+      placeholder.textContent = 'No active project selected';
+      panel.appendChild(placeholder);
+      return;
+    }
+
+    // Avoid re-init if already rendered for this workspace
+    if (panel._wsId === ws.id && panel.querySelector('.files-container')) return;
+    panel._wsId = ws.id;
+
+    panel.replaceChildren();
+    const container = document.createElement('div');
+    container.className = 'files-container';
+
+    const sidebar = document.createElement('div');
+    sidebar.className = 'files-sidebar';
+    sidebar.id = 'files-tree';
+
+    const editorPane = document.createElement('div');
+    editorPane.className = 'files-editor-pane';
+    editorPane.id = 'files-editor-pane';
+    const editorPlaceholder = document.createElement('div');
+    editorPlaceholder.className = 'tasks-placeholder';
+    editorPlaceholder.textContent = 'Select a file to edit';
+    editorPane.appendChild(editorPlaceholder);
+
+    container.appendChild(sidebar);
+    container.appendChild(editorPane);
+    panel.appendChild(container);
+
+    await this._loadFileTree(sidebar, ws.id, '');
+  }
+
+  /**
+   * Load file tree entries for a subpath into a container element.
+   * Entries are sorted dirs-first, then files, each group alphabetically.
+   * @param {HTMLElement} container - Target container element
+   * @param {string} workspaceId - Active workspace ID
+   * @param {string} subpath - Relative subpath within workspace root
+   */
+  async _loadFileTree(container, workspaceId, subpath) {
+    container.replaceChildren();
+    const loadingEl = document.createElement('div');
+    loadingEl.className = 'tasks-placeholder';
+    loadingEl.textContent = 'Loading files\u2026';
+    container.appendChild(loadingEl);
+
+    try {
+      const data = await this.api('GET', `/api/files/tree?workspaceId=${encodeURIComponent(workspaceId)}&subpath=${encodeURIComponent(subpath)}`);
+      container.replaceChildren();
+
+      if (!data.entries || !data.entries.length) {
+        const empty = document.createElement('div');
+        empty.className = 'tasks-placeholder';
+        empty.textContent = 'Empty directory';
+        container.appendChild(empty);
+        return;
+      }
+
+      for (const entry of data.entries) {
+        const row = document.createElement('div');
+        row.className = 'files-tree-row files-tree-' + entry.type;
+        row.dataset.path = entry.path;
+        row.dataset.type = entry.type;
+
+        const icon = document.createElement('span');
+        icon.className = 'files-tree-icon';
+        icon.textContent = entry.type === 'dir' ? '\u25B6' : '\u2022';
+
+        const name = document.createElement('span');
+        name.className = 'files-tree-name';
+        name.textContent = entry.name;
+
+        row.appendChild(icon);
+        row.appendChild(name);
+
+        if (entry.type === 'dir') {
+          const children = document.createElement('div');
+          children.className = 'files-tree-children';
+          children.hidden = true;
+
+          row.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const expanded = !children.hidden;
+            children.hidden = expanded;
+            icon.textContent = expanded ? '\u25B6' : '\u25BC';
+            if (!children.hidden && !children._loaded) {
+              children._loaded = true;
+              await this._loadFileTree(children, workspaceId, entry.path);
+            }
+          });
+
+          container.appendChild(row);
+          container.appendChild(children);
+        } else {
+          row.addEventListener('click', () => {
+            const fileContainer = container.closest('.files-container');
+            if (fileContainer) {
+              fileContainer.querySelectorAll('.files-tree-row').forEach(r => r.classList.remove('active'));
+            }
+            row.classList.add('active');
+            this._openFileInEditor(workspaceId, entry.path);
+          });
+          container.appendChild(row);
+        }
+      }
+    } catch (err) {
+      container.replaceChildren();
+      const errEl = document.createElement('div');
+      errEl.className = 'tasks-placeholder tasks-placeholder--error';
+      errEl.textContent = 'Failed to load tree: ' + (err.message || 'unknown');
+      container.appendChild(errEl);
+    }
+  }
+
+  /**
+   * Open a file in the editor pane. Prompts to discard if editor is dirty.
+   * @param {string} workspaceId - Active workspace ID
+   * @param {string} filePath - Relative path to the file
+   */
+  async _openFileInEditor(workspaceId, filePath) {
+    const pane = document.getElementById('files-editor-pane');
+    if (!pane) return;
+
+    if (this._filesEditorDirty) {
+      const confirmed = window.confirm('Unsaved changes in ' + this._filesEditorCurrentFile + '. Discard?');
+      if (!confirmed) return;
+    }
+
+    pane.replaceChildren();
+    const loadingEl = document.createElement('div');
+    loadingEl.className = 'tasks-placeholder';
+    loadingEl.textContent = 'Loading file\u2026';
+    pane.appendChild(loadingEl);
+
+    try {
+      const data = await this.api('GET', `/api/files/content?workspaceId=${encodeURIComponent(workspaceId)}&file=${encodeURIComponent(filePath)}`);
+
+      pane.replaceChildren();
+
+      const header = document.createElement('div');
+      header.className = 'files-editor-header';
+
+      const fileNameEl = document.createElement('span');
+      fileNameEl.className = 'files-editor-filename';
+      fileNameEl.textContent = filePath;
+
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'files-save-btn';
+      saveBtn.textContent = 'Save';
+      saveBtn.disabled = true;
+      saveBtn.addEventListener('click', () => this._saveCurrentFile(workspaceId));
+
+      header.appendChild(fileNameEl);
+      header.appendChild(saveBtn);
+      pane.appendChild(header);
+
+      const editorContainer = document.createElement('div');
+      editorContainer.className = 'files-cm-container';
+      pane.appendChild(editorContainer);
+
+      this._filesEditorDirty = false;
+      this._filesEditorCurrentFile = filePath;
+      this._filesEditorWorkspaceId = workspaceId;
+      this._filesSaveBtn = saveBtn;
+      this._filesEditorFilenameEl = fileNameEl;
+
+      await this._initCodeMirror(editorContainer, data.content, data.language, saveBtn);
+
+    } catch (err) {
+      pane.replaceChildren();
+      const errEl = document.createElement('div');
+      errEl.className = 'tasks-placeholder tasks-placeholder--error';
+      errEl.textContent = 'Failed to load file: ' + (err.message || 'unknown');
+      pane.appendChild(errEl);
+    }
+  }
+
+  /**
+   * Initialize a CodeMirror 6 editor in container. Lazy-loads CM from CDN.
+   * @param {HTMLElement} container - Mount point
+   * @param {string} content - Initial document text
+   * @param {string} language - Language hint (for future syntax extension)
+   * @param {HTMLButtonElement} saveBtn - Save button to enable on change
+   */
+  async _initCodeMirror(container, content, language, saveBtn) {
+    if (!window.__cmLoaded) {
+      await this._loadCodeMirror();
+    }
+
+    const { basicSetup, EditorView, EditorState } = window.__cm;
+
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: content,
+        extensions: [
+          basicSetup,
+          EditorView.updateListener.of(update => {
+            if (update.docChanged) {
+              this._filesEditorDirty = true;
+              if (saveBtn) {
+                saveBtn.disabled = false;
+                saveBtn.classList.add('dirty');
+              }
+              if (this._filesEditorFilenameEl && this._filesEditorCurrentFile) {
+                if (!this._filesEditorFilenameEl.textContent.startsWith('\u2022 ')) {
+                  this._filesEditorFilenameEl.textContent = '\u2022 ' + this._filesEditorCurrentFile;
+                }
+              }
+            }
+          }),
+        ],
+      }),
+      parent: container,
+    });
+
+    this._filesEditorView = view;
+  }
+
+  /**
+   * Load CodeMirror 6 from the locally-served vendor bundle.
+   * The bundle is a self-contained ESM file built by esbuild so no CDN access is needed.
+   * Uses a <script type="module"> tag to get a module context for the dynamic import.
+   */
+  _loadCodeMirror() {
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.type = 'module';
+      const eventName = '__cm_loaded_' + Date.now();
+      script.textContent = [
+        "(async () => {",
+        "  try {",
+        "    const { basicSetup, EditorView, EditorState } = await import('/vendor/codemirror.bundle.js');",
+        "    window.__cm = { basicSetup, EditorView, EditorState };",
+        "    window.__cmLoaded = true;",
+        `    document.dispatchEvent(new Event('${eventName}'));`,
+        "  } catch(e) {",
+        `    document.dispatchEvent(new CustomEvent('${eventName}_err', { detail: (e && e.message) || String(e) }));`,
+        "  }",
+        "})();",
+      ].join('\n');
+      document.addEventListener(eventName, resolve, { once: true });
+      document.addEventListener(eventName + '_err', (e) => reject(new Error(e.detail || 'CodeMirror failed to load')), { once: true });
+      document.head.appendChild(script);
+    });
+  }
+
+  /**
+   * Save the current file. Shows Saving… / Saved ✓ / Save failed feedback.
+   * @param {string} [workspaceId] - Falls back to tracked _filesEditorWorkspaceId
+   */
+  async _saveCurrentFile(workspaceId) {
+    const ws = workspaceId || this._filesEditorWorkspaceId;
+    const file = this._filesEditorCurrentFile;
+    const view = this._filesEditorView;
+
+    if (!ws || !file || !view) return;
+
+    const content = view.state.doc.toString();
+
+    try {
+      if (this._filesSaveBtn) {
+        this._filesSaveBtn.disabled = true;
+        this._filesSaveBtn.textContent = 'Saving\u2026';
+      }
+
+      await this.api('POST', '/api/files/save', { workspaceId: ws, file, content });
+
+      this._filesEditorDirty = false;
+      if (this._filesSaveBtn) {
+        this._filesSaveBtn.classList.remove('dirty');
+        this._filesSaveBtn.textContent = 'Saved \u2713';
+        setTimeout(() => {
+          if (this._filesSaveBtn) {
+            this._filesSaveBtn.textContent = 'Save';
+            this._filesSaveBtn.disabled = !this._filesEditorDirty;
+          }
+        }, 1500);
+      }
+      if (this._filesEditorFilenameEl && this._filesEditorCurrentFile) {
+        this._filesEditorFilenameEl.textContent = this._filesEditorCurrentFile;
+      }
+    } catch (err) {
+      if (this._filesSaveBtn) {
+        this._filesSaveBtn.disabled = false;
+        this._filesSaveBtn.textContent = 'Save failed';
+        setTimeout(() => {
+          if (this._filesSaveBtn) this._filesSaveBtn.textContent = 'Save';
+        }, 2000);
+      }
+      console.error('Save failed:', err);
+      alert('Save failed: ' + (err.message || 'unknown error'));
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+
   setTasksLayout(layout) {
     this._tasksLayout = layout;
     localStorage.setItem('cwm_tasksLayout', layout);
@@ -4684,6 +5230,364 @@ class CWMApp {
         this._renderTasksList(this._worktreeTaskCache);
       }
     }
+  }
+
+  /**
+   * Render the Git tab panel.
+   * Shows a two-pane layout: left pane has branch indicator, file status list,
+   * and commit log; right pane shows diff for the selected file.
+   * Includes 10-second auto-refresh when the tab is active.
+   */
+  async renderTasksGitPanel() {
+    const panel = document.getElementById('tasks-git-panel');
+    if (!panel) return;
+
+    const ws = this.state.activeWorkspace;
+    if (!ws) {
+      panel.textContent = '';
+      const pl = document.createElement('div');
+      pl.className = 'tasks-placeholder';
+      pl.textContent = 'No active project selected';
+      panel.appendChild(pl);
+      return;
+    }
+
+    panel.textContent = '';
+    const loading = document.createElement('div');
+    loading.className = 'tasks-placeholder';
+    loading.textContent = 'Loading git status\u2026';
+    panel.appendChild(loading);
+
+    try {
+      const status = await this.api('GET', `/api/git/status?workspaceId=${ws.id}`);
+
+      panel.textContent = '';
+
+      const container = document.createElement('div');
+      container.className = 'git-panel-container';
+
+      const left = document.createElement('div');
+      left.className = 'git-panel-left';
+      left.id = 'git-status-list';
+
+      // On auto-refresh, preserve the existing right pane so the visible diff
+      // isn't wiped while the user is reading it. Clone children via DOM (no innerHTML).
+      const existingRight = document.getElementById('git-diff-viewer');
+      const hasContent = existingRight &&
+        existingRight.children.length &&
+        !existingRight.querySelector('.tasks-placeholder');
+
+      const right = hasContent
+        ? existingRight.cloneNode(true)
+        : document.createElement('div');
+      right.className = 'git-panel-right';
+      right.id = 'git-diff-viewer';
+
+      if (!hasContent) {
+        const diffPlaceholder = document.createElement('div');
+        diffPlaceholder.className = 'tasks-placeholder';
+        diffPlaceholder.textContent = 'Select a file or commit to view diff';
+        right.appendChild(diffPlaceholder);
+      }
+
+      panel.appendChild(container);
+      container.appendChild(left);
+      container.appendChild(right);
+
+      // Branch indicator bar
+      const branchBar = document.createElement('div');
+      branchBar.className = 'git-branch-bar';
+      const branchIcon = document.createElement('span');
+      branchIcon.className = 'git-branch-icon';
+      branchIcon.textContent = '\u2387 ';
+      const branchName = document.createElement('span');
+      branchName.className = 'git-branch-name';
+      branchName.textContent = status.branch || 'unknown';
+      branchBar.appendChild(branchIcon);
+      branchBar.appendChild(branchName);
+      left.appendChild(branchBar);
+
+      if (status.isClean) {
+        const clean = document.createElement('div');
+        clean.className = 'tasks-placeholder';
+        clean.textContent = 'Working tree clean';
+        left.appendChild(clean);
+      } else {
+        // Group files by their change state
+        const groups = [
+          { label: 'Staged', files: status.staged || [], staged: true },
+          { label: 'Modified', files: status.modified || [], staged: false },
+          { label: 'Untracked', files: status.notAdded || [], staged: false },
+          { label: 'Deleted', files: status.deleted || [], staged: false },
+        ];
+
+        for (const group of groups) {
+          if (!group.files.length) continue;
+
+          const header = document.createElement('div');
+          header.className = 'git-group-header';
+          header.textContent = `${group.label} (${group.files.length})`;
+          left.appendChild(header);
+
+          for (const fileObj of group.files) {
+            const filename = typeof fileObj === 'string' ? fileObj : fileObj.file;
+            const row = document.createElement('div');
+            row.className = 'git-file-row';
+            row.dataset.file = filename;
+            row.dataset.staged = group.staged;
+
+            const stateEl = document.createElement('span');
+            stateEl.className = `git-file-state git-state-${group.label.toLowerCase()}`;
+            stateEl.textContent = group.label[0]; // S, M, U, D
+
+            const nameEl = document.createElement('span');
+            nameEl.className = 'git-file-name';
+            nameEl.textContent = filename;
+
+            row.appendChild(stateEl);
+            row.appendChild(nameEl);
+
+            row.addEventListener('click', () => {
+              left.querySelectorAll('.git-file-row').forEach(r => r.classList.remove('active'));
+              row.classList.add('active');
+              this._selectedGitFile = { file: filename, staged: group.staged };
+              this._selectedGitCommit = null; // clear commit selection
+              this._loadGitDiff(right, ws.id, filename, group.staged);
+            });
+
+            left.appendChild(row);
+          }
+        }
+      }
+
+      // Commit log section appended below file status
+      await this._renderGitLog(left, right, ws.id);
+
+    } catch (err) {
+      panel.textContent = '';
+      const errEl = document.createElement('div');
+      errEl.className = 'tasks-placeholder tasks-placeholder--error';
+      errEl.textContent = 'Failed to load git status: ' + (err.message || 'unknown error');
+      panel.appendChild(errEl);
+    }
+  }
+
+  /**
+   * Load and render the diff for a specific file into the diff viewer pane.
+   * Renders line-by-line using DOM APIs to prevent XSS from raw diff content.
+   * @param {HTMLElement} container - The right pane to render into
+   * @param {string} workspaceId - Workspace ID for the API call
+   * @param {string} file - File path to diff
+   * @param {boolean} staged - Whether to show staged vs unstaged diff
+   */
+  async _loadGitDiff(container, workspaceId, file, staged) {
+    container.textContent = '';
+    const loadingEl = document.createElement('div');
+    loadingEl.className = 'tasks-placeholder';
+    loadingEl.textContent = 'Loading diff\u2026';
+    container.appendChild(loadingEl);
+
+    try {
+      const data = await this.api('GET', `/api/git/diff?workspaceId=${workspaceId}&file=${encodeURIComponent(file)}&staged=${staged}`);
+      const diffText = data.diff || '';
+
+      if (!diffText.trim()) {
+        container.textContent = '';
+        const empty = document.createElement('div');
+        empty.className = 'tasks-placeholder';
+        empty.textContent = 'No diff available';
+        container.appendChild(empty);
+        return;
+      }
+
+      container.textContent = '';
+      const pre = document.createElement('pre');
+      pre.className = 'git-diff-viewer';
+
+      // Parse line-by-line and apply syntax coloring via class, not innerHTML
+      const lines = diffText.split('\n');
+      for (const line of lines) {
+        const span = document.createElement('span');
+        span.textContent = line + '\n';
+        if (line.startsWith('+') && !line.startsWith('+++')) {
+          span.className = 'diff-add';
+        } else if (line.startsWith('-') && !line.startsWith('---')) {
+          span.className = 'diff-del';
+        } else if (line.startsWith('@@')) {
+          span.className = 'diff-hunk';
+        } else {
+          span.className = 'diff-ctx';
+        }
+        pre.appendChild(span);
+      }
+      container.appendChild(pre);
+    } catch (err) {
+      container.textContent = '';
+      const errEl = document.createElement('div');
+      errEl.className = 'tasks-placeholder tasks-placeholder--error';
+      errEl.textContent = 'Failed to load diff: ' + (err.message || 'unknown');
+      container.appendChild(errEl);
+    }
+  }
+
+  /**
+   * Render the recent commit log section inside the left panel.
+   * Clicking a row shows the full commit diff in the right pane.
+   * Clicking the hash badge copies the full hash to clipboard.
+   * @param {HTMLElement} container - The left pane to append the log into
+   * @param {HTMLElement} right - The right diff-viewer pane
+   * @param {string} workspaceId - Workspace ID for the API call
+   */
+  async _renderGitLog(container, right, workspaceId) {
+    const logSection = document.createElement('div');
+    logSection.className = 'git-log-section';
+
+    const logHeader = document.createElement('div');
+    logHeader.className = 'git-group-header';
+    logHeader.textContent = 'Recent Commits';
+    logSection.appendChild(logHeader);
+    container.appendChild(logSection);
+
+    try {
+      const data = await this.api('GET', `/api/git/log?workspaceId=${workspaceId}&limit=20`);
+      const commits = data.commits || [];
+
+      if (!commits.length) {
+        const empty = document.createElement('div');
+        empty.className = 'tasks-placeholder';
+        empty.textContent = 'No commits yet';
+        logSection.appendChild(empty);
+        return;
+      }
+
+      for (const commit of commits) {
+        const row = document.createElement('div');
+        row.className = 'git-commit-row';
+        row.title = 'Click to view commit diff';
+        row.style.cursor = 'pointer';
+
+        const hash = document.createElement('span');
+        hash.className = 'git-commit-hash';
+        hash.textContent = commit.shortHash;
+        hash.title = 'Click to copy full hash';
+        hash.addEventListener('click', (e) => {
+          e.stopPropagation(); // don't also trigger row click
+          navigator.clipboard.writeText(commit.hash).catch(() => {});
+          hash.textContent = 'copied!';
+          setTimeout(() => { hash.textContent = commit.shortHash; }, 1500);
+        });
+
+        const msg = document.createElement('span');
+        msg.className = 'git-commit-msg';
+        msg.textContent = commit.message;
+
+        const meta = document.createElement('span');
+        meta.className = 'git-commit-meta';
+        meta.textContent = this._relativeTime(new Date(commit.date));
+
+        row.appendChild(hash);
+        row.appendChild(msg);
+        row.appendChild(meta);
+        logSection.appendChild(row);
+
+        // Restore selection state after auto-refresh
+        if (this._selectedGitCommit === commit.hash) {
+          row.classList.add('selected');
+        }
+
+        // Row click: show full commit diff in the right pane
+        row.addEventListener('click', () => {
+          logSection.querySelectorAll('.git-commit-row').forEach(r => r.classList.remove('selected'));
+          row.classList.add('selected');
+          this._selectedGitCommit = commit.hash;
+          this._selectedGitFile = null; // clear file selection
+          this._loadGitCommitDiff(right, workspaceId, commit.hash);
+        });
+      }
+    } catch (err) {
+      const errEl = document.createElement('div');
+      errEl.className = 'tasks-placeholder tasks-placeholder--error';
+      errEl.textContent = 'Failed to load commits: ' + (err.message || 'unknown');
+      logSection.appendChild(errEl);
+    }
+  }
+
+  /**
+   * Load and render the full diff for a commit (git show) into the diff viewer.
+   * @param {HTMLElement} container - The right pane to render into
+   * @param {string} workspaceId - Workspace ID for the API call
+   * @param {string} hash - Full commit hash
+   */
+  async _loadGitCommitDiff(container, workspaceId, hash) {
+    container.textContent = '';
+    const loadingEl = document.createElement('div');
+    loadingEl.className = 'tasks-placeholder';
+    loadingEl.textContent = 'Loading commit\u2026';
+    container.appendChild(loadingEl);
+
+    try {
+      const data = await this.api('GET', `/api/git/commit-diff?workspaceId=${workspaceId}&hash=${encodeURIComponent(hash)}`);
+      const diffText = data.diff || '';
+
+      if (!diffText.trim()) {
+        container.textContent = '';
+        const empty = document.createElement('div');
+        empty.className = 'tasks-placeholder';
+        empty.textContent = 'No diff available for this commit';
+        container.appendChild(empty);
+        return;
+      }
+
+      container.textContent = '';
+      const pre = document.createElement('pre');
+      pre.className = 'git-diff-viewer';
+
+      const lines = diffText.split('\n');
+      for (const line of lines) {
+        const span = document.createElement('span');
+        span.textContent = line + '\n';
+        if (line.startsWith('+') && !line.startsWith('+++')) {
+          span.className = 'diff-add';
+        } else if (line.startsWith('-') && !line.startsWith('---')) {
+          span.className = 'diff-del';
+        } else if (line.startsWith('@@')) {
+          span.className = 'diff-hunk';
+        } else if (line.startsWith('commit ') || line.startsWith('Author:') || line.startsWith('Date:')) {
+          span.className = 'diff-meta';
+        } else {
+          span.className = 'diff-ctx';
+        }
+        pre.appendChild(span);
+      }
+      container.appendChild(pre);
+    } catch (err) {
+      container.textContent = '';
+      const errEl = document.createElement('div');
+      errEl.className = 'tasks-placeholder tasks-placeholder--error';
+      errEl.textContent = 'Failed to load commit: ' + (err.message || 'unknown');
+      container.appendChild(errEl);
+    }
+  }
+
+  /**
+   * Format a Date as a human-readable relative time string.
+   * Returns values like "just now", "5m ago", "2h ago", "3d ago",
+   * or a locale date string for dates older than 30 days.
+   * @param {Date} date - The date to format
+   * @returns {string} Relative time string
+   */
+  _relativeTime(date) {
+    const now = new Date();
+    const diff = now - date;
+    const seconds = Math.floor(diff / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+    if (days > 30) return date.toLocaleDateString();
+    if (days > 0) return `${days}d ago`;
+    if (hours > 0) return `${hours}h ago`;
+    if (minutes > 0) return `${minutes}m ago`;
+    return 'just now';
   }
 
   /** Fetch tasks and render in the active layout */
@@ -6399,7 +7303,10 @@ class CWMApp {
     }
 
     if (isTasks) {
-      this.renderTasksView();
+      this._initTasksTabs();
+      if (!this._activeTasksTab || this._activeTasksTab === 'worktree') {
+        this.renderTasksView();
+      }
     } else if (isDocs) {
       this.loadDocs();
       this.loadTdIssues();
@@ -11391,6 +12298,16 @@ class CWMApp {
       const showText = details.raw || details.description || details.body || '';
       if (showText) {
         body.appendChild(this._makeTdModalSection('Details', showText));
+      }
+
+      // Log entries (progress, decisions, blockers)
+      if (Array.isArray(details.logs) && details.logs.length > 0) {
+        const logLines = details.logs.map(l => {
+          const ts = l.timestamp ? new Date(l.timestamp).toLocaleString() : '';
+          const tag = l.type && l.type !== 'progress' ? `[${l.type}] ` : '';
+          return ts ? `${ts}  ${tag}${l.message}` : `${tag}${l.message}`;
+        }).join('\n\n');
+        body.appendChild(this._makeTdModalSection('Log', logLines));
       }
     }
 

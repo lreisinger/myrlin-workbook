@@ -52,3 +52,4 @@ scripts/setup-autostart.ps1
 
 # Frontend backup snapshots
 src/web/public/.backup/
+.todos/

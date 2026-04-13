@@ -5779,7 +5779,10 @@ async function gitRepoRoot(dir) {
 }
 
 app.get('/api/git/status', requireAuth, async (req, res) => {
-  const dir = req.query.dir;
+  let dir = req.query.dir;
+  if (!dir && req.query.workspaceId) {
+    dir = resolveWorkspaceDir(getStore(), req.query.workspaceId);
+  }
   if (!dir) return res.status(400).json({ error: 'dir query parameter required' });
 
   // Return cached result if fresh enough
@@ -5831,7 +5834,10 @@ app.get('/api/git/status', requireAuth, async (req, res) => {
 });
 
 app.get('/api/git/branches', requireAuth, async (req, res) => {
-  const dir = req.query.dir;
+  let dir = req.query.dir;
+  if (!dir && req.query.workspaceId) {
+    dir = resolveWorkspaceDir(getStore(), req.query.workspaceId);
+  }
   if (!dir) return res.status(400).json({ error: 'dir query parameter required' });
   try {
     const root = await gitRepoRoot(dir);
@@ -7103,6 +7109,100 @@ function extractSessionName(filePath, sessionId) {
   return sessionId;
 }
 
+// ── Files API ──────────────────────────────────────────────────────────────
+const fileManager = require('./file-manager');
+
+/**
+ * Resolve the primary working directory for a workspace.
+ * Uses the most common workingDir across the workspace's sessions.
+ * Returns null if no sessions have a workingDir set.
+ *
+ * @param {Object} store - App store instance
+ * @param {string} workspaceId - Workspace ID
+ * @returns {string|null}
+ */
+function resolveWorkspaceDir(store, workspaceId) {
+  const sessions = store.getWorkspaceSessions(workspaceId);
+  if (!sessions || sessions.length === 0) return null;
+  const counts = {};
+  for (const s of sessions) {
+    if (s.workingDir) counts[s.workingDir] = (counts[s.workingDir] || 0) + 1;
+  }
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  return sorted.length > 0 ? sorted[0][0] : null;
+}
+
+/**
+ * GET /api/files/tree?workspaceId=<id>&subpath=<rel>
+ * Returns directory entries for a subpath within the workspace root.
+ * Skips .git, node_modules, and other build artifacts.
+ */
+app.get('/api/files/tree', requireAuth, async (req, res) => {
+  try {
+    const { workspaceId, subpath = '' } = req.query;
+    if (!workspaceId) return res.status(400).json({ error: 'workspaceId required' });
+    const store = getStore();
+    const ws = store.getWorkspace(workspaceId);
+    if (!ws) return res.status(404).json({ error: 'Workspace not found' });
+    const workingDir = resolveWorkspaceDir(store, workspaceId);
+    if (!workingDir) return res.status(400).json({ error: 'Workspace has no sessions with a working directory' });
+    const tree = await fileManager.getTree(workingDir, subpath);
+    res.json(tree);
+  } catch (err) {
+    const status = err.message.includes('traversal') ? 403 : 500;
+    res.status(status).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/files/content?workspaceId=<id>&file=<rel>
+ * Returns file content as text with a CodeMirror language hint.
+ * Rejects files larger than 1MB.
+ */
+app.get('/api/files/content', requireAuth, async (req, res) => {
+  try {
+    const { workspaceId, file } = req.query;
+    if (!workspaceId) return res.status(400).json({ error: 'workspaceId required' });
+    if (!file) return res.status(400).json({ error: 'file param required' });
+    const store = getStore();
+    const ws = store.getWorkspace(workspaceId);
+    if (!ws) return res.status(404).json({ error: 'Workspace not found' });
+    const workingDir = resolveWorkspaceDir(store, workspaceId);
+    if (!workingDir) return res.status(400).json({ error: 'Workspace has no sessions with a working directory' });
+    const result = await fileManager.getContent(workingDir, file);
+    res.json(result);
+  } catch (err) {
+    const status = err.message.includes('traversal') ? 403 : 500;
+    res.status(status).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/files/save
+ * Body: { workspaceId, file, content }
+ * Atomically saves file content (write temp → rename).
+ */
+app.post('/api/files/save', requireAuth, async (req, res) => {
+  try {
+    const { workspaceId, file, content } = req.body || {};
+    if (!workspaceId) return res.status(400).json({ error: 'workspaceId required' });
+    if (!file) return res.status(400).json({ error: 'file required' });
+    if (typeof content !== 'string') return res.status(400).json({ error: 'content must be a string' });
+    const store = getStore();
+    const ws = store.getWorkspace(workspaceId);
+    if (!ws) return res.status(404).json({ error: 'Workspace not found' });
+    const workingDir = resolveWorkspaceDir(store, workspaceId);
+    if (!workingDir) return res.status(400).json({ error: 'Workspace has no sessions with a working directory' });
+    const result = await fileManager.saveContent(workingDir, file, content);
+    res.json(result);
+  } catch (err) {
+    const status = err.message.includes('traversal') ? 403 : 500;
+    res.status(status).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
  * GET /api/search?q=<query>&limit=20
  * Full-text search across all Claude Code JSONL session files.
@@ -7579,6 +7679,87 @@ app.get('/api/browse', requireAuth, (req, res) => {
   entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 
   res.json({ currentPath: targetPath, parent: hasParent ? parent : null, entries });
+});
+
+// ── Git API endpoints (log + diff) ────────────────────────────────────────────
+// Note: /api/git/status and /api/git/branches are registered earlier in the file
+// (upstream routes) and now also accept workspaceId via resolveWorkspaceDir().
+
+const gitManager = require('./git-manager');
+
+/**
+ * GET /api/git/log
+ * Returns the commit log for a workspace's working directory.
+ *
+ * @query {string} workspaceId - The workspace ID
+ * @query {number} [limit=20] - Maximum number of commits to return
+ * @returns {{ commits: Array<{ hash, shortHash, author, date, message }> }}
+ */
+app.get('/api/git/log', requireAuth, async (req, res) => {
+  try {
+    const { workspaceId, limit } = req.query;
+    const store = getStore();
+    if (!workspaceId) return res.status(400).json({ error: 'workspaceId required' });
+    const ws = store.getWorkspace(workspaceId);
+    if (!ws) return res.status(404).json({ error: 'Workspace not found' });
+    const workingDir = resolveWorkspaceDir(store, workspaceId);
+    if (!workingDir) return res.status(400).json({ error: 'Workspace has no sessions with a working directory' });
+    const log = await gitManager.getLog(workingDir, limit);
+    res.json({ commits: log });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/git/diff
+ * Returns the unified diff for a specific file in a workspace.
+ *
+ * @query {string} workspaceId - The workspace ID
+ * @query {string} file - File path relative to the workspace working directory
+ * @query {string} [staged] - 'true' to show staged diff, omit for unstaged
+ * @returns {{ diff: string }}
+ */
+app.get('/api/git/diff', requireAuth, async (req, res) => {
+  try {
+    const { workspaceId, file, staged } = req.query;
+    const store = getStore();
+    if (!workspaceId) return res.status(400).json({ error: 'workspaceId required' });
+    const ws = store.getWorkspace(workspaceId);
+    if (!ws) return res.status(404).json({ error: 'Workspace not found' });
+    const workingDir = resolveWorkspaceDir(store, workspaceId);
+    if (!workingDir) return res.status(400).json({ error: 'Workspace has no sessions with a working directory' });
+    const diff = await gitManager.getDiff(workingDir, file, staged === 'true');
+    res.json({ diff });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+/**
+ * GET /api/git/commit-diff
+ * Returns the full patch output (git show) for a specific commit.
+ *
+ * @query {string} workspaceId - The workspace ID
+ * @query {string} hash - Commit hash (full or short, 4-40 hex chars)
+ * @returns {{ diff: string }}
+ */
+app.get('/api/git/commit-diff', requireAuth, async (req, res) => {
+  try {
+    const { workspaceId, hash } = req.query;
+    const store = getStore();
+    if (!workspaceId) return res.status(400).json({ error: 'workspaceId required' });
+    if (!hash) return res.status(400).json({ error: 'hash required' });
+    const ws = store.getWorkspace(workspaceId);
+    if (!ws) return res.status(404).json({ error: 'Workspace not found' });
+    const workingDir = resolveWorkspaceDir(store, workspaceId);
+    if (!workingDir) return res.status(400).json({ error: 'Workspace has no sessions with a working directory' });
+    const diff = await gitManager.getCommitDiff(workingDir, hash);
+    res.json({ diff });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ──────────────────────────────────────────────────────────
