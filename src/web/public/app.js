@@ -10151,7 +10151,7 @@ class CWMApp {
         // Right-click context menu on terminal pane
         pane.addEventListener('contextmenu', (e) => {
           const tp = this.terminalPanes[slotIdx];
-          if (!tp) return; // empty pane - let default menu show
+          if (!tp) { e.preventDefault(); e.stopPropagation(); this._showEmptyPaneContextMenu(slotIdx, e.clientX, e.clientY); return; }
           e.preventDefault();
           e.stopPropagation();
           this.showTerminalContextMenu(slotIdx, e.clientX, e.clientY);
@@ -10491,6 +10491,22 @@ class CWMApp {
     });
   }
 
+  /**
+   * Context menu shown when right-clicking an empty (no terminal) pane slot.
+   * Offers quick access to all pane view types.
+   */
+  _showEmptyPaneContextMenu(slotIdx, x, y) {
+    const items = [
+      { label: 'Worktree Tasks', action: () => this.openViewInPane(slotIdx, 'tasks-worktree') },
+      { label: 'td Issues', action: () => this.openViewInPane(slotIdx, 'tasks-td') },
+      { label: 'Git Status', action: () => this.openViewInPane(slotIdx, 'tasks-git') },
+      { label: 'Files', action: () => this.openViewInPane(slotIdx, 'tasks-files') },
+      { type: 'sep' },
+      { label: 'Workspace Doc', action: () => this.openViewInPane(slotIdx, 'doc') },
+    ];
+    this._renderContextItems('Open View', items, x, y);
+  }
+
   showTerminalContextMenu(slotIdx, x, y) {
     const tp = this.terminalPanes[slotIdx];
     if (!tp) return;
@@ -10671,6 +10687,19 @@ class CWMApp {
           this.showToast('Element logged to console (F12)', 'info');
         }
       },
+    });
+
+    // ── Switch to view ────────────────────────────────────────
+    items.push({ type: 'sep' });
+    items.push({
+      label: 'Switch to view',
+      submenu: [
+        { label: 'Worktree Tasks', action: () => this.openViewInPane(slotIdx, 'tasks-worktree') },
+        { label: 'td Issues', action: () => this.openViewInPane(slotIdx, 'tasks-td') },
+        { label: 'Git Status', action: () => this.openViewInPane(slotIdx, 'tasks-git') },
+        { label: 'Files', action: () => this.openViewInPane(slotIdx, 'tasks-files') },
+        { label: 'Workspace Doc', action: () => this.openViewInPane(slotIdx, 'doc') },
+      ],
     });
 
     this._renderContextItems(tp.sessionName || 'Terminal', items, x, y);
