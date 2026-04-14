@@ -10227,6 +10227,26 @@ class CWMApp {
       });
     }
 
+    // Save to Notes (only show when there's a selection)
+    if (tp.term && tp.term.hasSelection()) {
+      items.push({
+        label: 'Save to Notes', icon: '&#128221;', action: async () => {
+          const selected = tp.term.getSelection();
+          const ws = this.state.activeWorkspace;
+          if (!ws) { this.showToast('No active workspace', 'error'); return; }
+          const result = await this.showPromptModal({
+            title: 'Save to Notes',
+            fields: [{ key: 'text', type: 'textarea', value: selected }],
+            confirmText: 'Save Note'
+          });
+          if (!result) return;
+          await this.api('POST', '/api/workspaces/' + ws.id + '/docs/notes', { text: result.text.trim() });
+          this.loadDocs();
+          this.showToast('Saved to Notes', 'success');
+        },
+      });
+    }
+
     // Paste from clipboard
     items.push({
       label: 'Paste', icon: '&#128203;', action: () => {
