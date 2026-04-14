@@ -9978,6 +9978,24 @@ class CWMApp {
           });
         }
 
+        // Pinned notes (bookmark) button — shows modal of all pinned notes for this pane's session
+        const pinDocBtn = pane.querySelector('.terminal-pane-pinnedoc');
+        if (pinDocBtn) {
+          pinDocBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._showPinnedNotesModal(slotIdx);
+          });
+        }
+
+        // Pane view back button — restores terminal after a non-terminal view (E003)
+        const backBtn = pane.querySelector('.pane-view-back');
+        if (backBtn) {
+          backBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (this.restoreTerminalInPane) this.restoreTerminalInPane(slotIdx);
+          });
+        }
+
         // Drag-to-reposition: make pane header draggable to swap panes
         const header = pane.querySelector('.terminal-pane-header');
         if (header) {
@@ -10207,6 +10225,31 @@ class CWMApp {
     el.dataset.activityKey = key;
 
     el.innerHTML = `<span class="activity-dot ${dotClass}"></span>${label}${detail}`;
+  }
+
+  /**
+   * Show a modal listing all pinned notes for the session currently open in the given pane slot.
+   * Fetches notes from the backend and displays them with timestamps.
+   * If there are no pinned notes, shows an info toast instead.
+   * @param {number} slotIdx - The terminal pane slot index
+   */
+  async _showPinnedNotesModal(slotIdx) {
+    const tp = this.terminalPanes[slotIdx];
+    if (!tp || !tp.sessionId) return;
+    const ws = this.state.activeWorkspace;
+    if (!ws) return;
+    const data = await this.api('GET', `/api/workspaces/${ws.id}/pinned-notes/${tp.sessionId}`);
+    const notes = data.notes || [];
+    if (notes.length === 0) {
+      this.showToast('No pinned notes for this session', 'info');
+      return;
+    }
+    const body = notes.map(n => `[${n.timestamp}]\n${n.text}`).join('\n\n---\n\n');
+    await this.showPromptModal({
+      title: 'Pinned Notes',
+      fields: [{ key: 'body', type: 'textarea', value: body }],
+      confirmText: 'Close',
+    });
   }
 
   showTerminalContextMenu(slotIdx, x, y) {
