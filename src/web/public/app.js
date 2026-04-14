@@ -5017,8 +5017,8 @@ class CWMApp {
    * Builds a two-pane layout: file tree sidebar on left, editor pane on right.
    * Skips re-initialization if already rendered for the same workspace.
    */
-  async renderTasksFilesPanel() {
-    const panel = document.getElementById('tasks-files-panel');
+  async renderTasksFilesPanel(container = null) {
+    const panel = container || document.getElementById('tasks-files-panel');
     if (!panel) return;
 
     const ws = this.state.activeWorkspace;
@@ -5353,8 +5353,8 @@ class CWMApp {
    * and commit log; right pane shows diff for the selected file.
    * Includes 10-second auto-refresh when the tab is active.
    */
-  async renderTasksGitPanel() {
-    const panel = document.getElementById('tasks-git-panel');
+  async renderTasksGitPanel(container = null) {
+    const panel = container || document.getElementById('tasks-git-panel');
     if (!panel) return;
 
     const ws = this.state.activeWorkspace;
@@ -5706,7 +5706,7 @@ class CWMApp {
   }
 
   /** Fetch tasks and render in the active layout */
-  async renderTasksView() {
+  async renderTasksView(container = null) {
     // Initialize layout from localStorage (default: board)
     if (!this._tasksLayout) {
       this._tasksLayout = localStorage.getItem('cwm_tasksLayout') || 'board';
