@@ -10166,6 +10166,9 @@ class CWMApp {
     if (this.state.settings.paneColorHighlights) {
       this.renderWorkspaces();
     }
+
+    // Refresh pinned-notes badge for this pane now that a session is loaded
+    this._refreshPanePin(slotIdx);
   }
 
   /**
@@ -11830,16 +11833,54 @@ class CWMApp {
     if (this.els.docsRoadmapCount) this.els.docsRoadmapCount.textContent = (docs.roadmap || []).length;
     if (this.els.docsRulesCount) this.els.docsRulesCount.textContent = (docs.rules || []).length;
 
-    // Notes
+    // Notes — built with DOM APIs to support pin buttons safely (no user HTML injected)
     if (this.els.docsNotesList) {
-      this.els.docsNotesList.innerHTML = (docs.notes || []).length > 0
-        ? (docs.notes || []).map((n, i) => `
-          <div class="docs-item" data-index="${i}">
-            <span class="docs-note-time">${this.escapeHtml(n.timestamp || '')}</span>
-            <span class="docs-note-text">${this.escapeHtml(n.text)}</span>
-            <button class="docs-item-delete btn btn-ghost btn-icon btn-sm" data-section="notes" data-index="${i}" title="Remove">&times;</button>
-          </div>`).join('')
-        : '<div class="docs-empty">No notes yet. Click + to add one.</div>';
+      const notes = docs.notes || [];
+      while (this.els.docsNotesList.firstChild) {
+        this.els.docsNotesList.removeChild(this.els.docsNotesList.firstChild);
+      }
+      if (notes.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'docs-empty';
+        empty.textContent = 'No notes yet. Click + to add one.';
+        this.els.docsNotesList.appendChild(empty);
+      } else {
+        notes.forEach((n, noteIndex) => {
+          const noteRow = document.createElement('div');
+          noteRow.className = 'docs-item';
+          noteRow.dataset.index = noteIndex;
+
+          const timeSpan = document.createElement('span');
+          timeSpan.className = 'docs-note-time';
+          timeSpan.textContent = n.timestamp || '';
+          noteRow.appendChild(timeSpan);
+
+          const textSpan = document.createElement('span');
+          textSpan.className = 'docs-note-text';
+          textSpan.textContent = n.text;
+          noteRow.appendChild(textSpan);
+
+          const pinBtn = document.createElement('button');
+          pinBtn.className = 'doc-pin-btn btn btn-ghost btn-icon btn-sm';
+          pinBtn.textContent = '📌';
+          pinBtn.title = 'Pin to focused terminal session';
+          pinBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleNotePin(noteIndex, pinBtn);
+          });
+          noteRow.appendChild(pinBtn);
+
+          const delBtn = document.createElement('button');
+          delBtn.className = 'docs-item-delete btn btn-ghost btn-icon btn-sm';
+          delBtn.dataset.section = 'notes';
+          delBtn.dataset.index = noteIndex;
+          delBtn.title = 'Remove';
+          delBtn.textContent = '×';
+          noteRow.appendChild(delBtn);
+
+          this.els.docsNotesList.appendChild(noteRow);
+        });
+      }
     }
 
     // Goals
@@ -11989,6 +12030,52 @@ class CWMApp {
     } catch (err) {
       this.showToast(err.message || 'Failed to save documentation', 'error');
     }
+  }
+
+  /**
+   * Toggle a pinned note on the currently focused terminal pane session.
+   * @param {number} noteIndex - 0-based index of the note in the workspace docs.notes array
+   * @param {HTMLButtonElement} buttonEl - The pin button element to update visually
+   */
+  async _toggleNotePin(noteIndex, buttonEl) {
+    const slot = this._activeTerminalSlot;
+    const tp = (slot !== null && slot !== undefined) ? this.terminalPanes[slot] : null;
+    if (!tp || !tp.sessionId) {
+      this.showToast('Focus a terminal pane first', 'error');
+      return;
+    }
+    const ws = this.state.activeWorkspace;
+    if (!ws) return;
+    const isPinned = buttonEl.classList.contains('pinned');
+    const action = isPinned ? 'unpin' : 'pin';
+    await this.api('POST', `/api/workspaces/${ws.id}/pinned-notes`, {
+      sessionId: tp.sessionId,
+      noteIndex,
+      action
+    });
+    buttonEl.classList.toggle('pinned', !isPinned);
+    await this._refreshPanePin(slot);
+  }
+
+  /**
+   * Refresh the pinned-notes badge on a terminal pane header.
+   * Shows/hides the badge button and updates the count label.
+   * @param {number} slotIdx - Terminal pane slot index (0-based)
+   */
+  async _refreshPanePin(slotIdx) {
+    const tp = this.terminalPanes[slotIdx];
+    if (!tp || !tp.sessionId) return;
+    const ws = this.state.activeWorkspace;
+    if (!ws) return;
+    const data = await this.api('GET', `/api/workspaces/${ws.id}/pinned-notes`);
+    const pins = data[tp.sessionId] || [];
+    const paneEl = document.getElementById(`term-pane-${slotIdx}`);
+    if (!paneEl) return;
+    const pinDocBtn = paneEl.querySelector('.terminal-pane-pinnedoc');
+    if (!pinDocBtn) return;
+    pinDocBtn.hidden = pins.length === 0;
+    const countEl = pinDocBtn.querySelector('.pane-pin-count');
+    if (countEl) countEl.textContent = pins.length > 0 ? pins.length : '';
   }
 
 
