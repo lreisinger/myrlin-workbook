@@ -13062,6 +13062,9 @@ class CWMApp {
       group.panes.forEach(p => {
         if (p.sessionId && !this.terminalPanes[p.slot]) {
           this.openTerminalInPane(p.slot, p.sessionId, p.sessionName || 'Terminal', p.spawnOpts || {});
+          if (p.viewType) {
+            setTimeout(() => this.openViewInPane(p.slot, p.viewType, p.viewData || {}), 100);
+          }
         }
       });
     }
@@ -13524,11 +13527,16 @@ class CWMApp {
       const tp = this.terminalPanes[i];
       // Save live TerminalPanes for layout restore.
       if (tp && tp.sessionId) {
+        const paneEl = document.getElementById('term-pane-' + i);
+        const viewType = paneEl?.dataset?.viewType || null;
+        const viewData = viewType ? JSON.parse(paneEl?.dataset?.viewData || '{}') : {};
         group.panes.push({
           slot: i,
           sessionId: tp.sessionId,
           sessionName: tp.sessionName,
           spawnOpts: tp.spawnOpts || {},
+          viewType,
+          viewData,
         });
       }
     }
