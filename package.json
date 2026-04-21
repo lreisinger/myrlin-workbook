@@ -21,7 +21,7 @@
     "gui:cdp": "node src/supervisor.js --cdp",
     "postinstall": "node scripts/postinstall.js",
     "restart": "bash scripts/restart-gui.sh",
-    "build:icons": "node scripts/build-lucide-bundle.mjs"
+    "build:icons": "node scripts/build-lucide-bundle.mjs && node scripts/build-material-bundle.mjs"
   },
   "repository": {
     "type": "git",
@@ -60,6 +60,7 @@
     "ws": "^8.19.0"
   },
   "devDependencies": {
+    "@material-icons/svg": "^1.0.33",
     "@playwright/test": "^1.58.2",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-web-links": "^0.12.0",
