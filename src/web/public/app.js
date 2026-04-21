@@ -7893,25 +7893,42 @@ class CWMApp {
           return;
         }
         if (f.type === 'icon') {
-          const allIcons = window.__lucideIcons || {};
-          const cats = window.__lucideIconCategories || {};
+          // Merge Lucide icons (bare name) and Material icons (mi/ prefix)
+          const lucideIcons = window.__lucideIcons || {};
+          const lucideCats  = window.__lucideIconCategories || {};
+          const materialIcons = window.__materialIcons || {};
+          const materialCats  = window.__materialIconCategories || {};
+
           const selectedIcon = f.value || '';
           let gridHtml = `<div class="icon-swatch icon-swatch-none${!selectedIcon ? ' selected' : ''}" data-icon="" title="No icon">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" stroke-dasharray="3 2"/></svg>
           </div>`;
-          if (Object.keys(cats).length > 0) {
-            for (const [cat, names] of Object.entries(cats)) {
+
+          // Lucide section
+          if (Object.keys(lucideCats).length > 0) {
+            gridHtml += `<span class="icon-picker-set-sep" data-set="lucide">Lucide</span>`;
+            for (const [cat, names] of Object.entries(lucideCats)) {
               gridHtml += `<span class="icon-picker-cat-sep" data-cat="${this.escapeHtml(cat)}">${this.escapeHtml(cat)}</span>`;
               for (const name of names) {
-                if (!allIcons[name]) continue;
-                gridHtml += `<div class="icon-swatch${selectedIcon === name ? ' selected' : ''}" data-icon="${this.escapeHtml(name)}" title="${this.escapeHtml(name)}">${allIcons[name]}</div>`;
+                if (!lucideIcons[name]) continue;
+                gridHtml += `<div class="icon-swatch${selectedIcon === name ? ' selected' : ''}" data-icon="${this.escapeHtml(name)}" title="${this.escapeHtml(name)}">${lucideIcons[name]}</div>`;
               }
             }
-          } else {
-            for (const [name, svg] of Object.entries(allIcons)) {
-              gridHtml += `<div class="icon-swatch${selectedIcon === name ? ' selected' : ''}" data-icon="${this.escapeHtml(name)}" title="${this.escapeHtml(name)}">${svg}</div>`;
+          }
+
+          // Material section
+          if (Object.keys(materialCats).length > 0) {
+            gridHtml += `<span class="icon-picker-set-sep" data-set="material">Material</span>`;
+            for (const [cat, names] of Object.entries(materialCats)) {
+              gridHtml += `<span class="icon-picker-cat-sep" data-cat="${this.escapeHtml('Material — ' + cat)}">${this.escapeHtml(cat)}</span>`;
+              for (const name of names) {
+                if (!materialIcons[name]) continue;
+                const storedName = 'mi/' + name;
+                gridHtml += `<div class="icon-swatch${selectedIcon === storedName ? ' selected' : ''}" data-icon="${this.escapeHtml(storedName)}" title="${this.escapeHtml(name)}">${materialIcons[name]}</div>`;
+              }
             }
           }
+
           bodyHtml += `
             <div class="input-group">
               <label class="input-label">${f.label} <span class="field-optional">optional</span></label>
@@ -7995,14 +8012,16 @@ class CWMApp {
             const q = search.value.toLowerCase().trim();
             grid.querySelectorAll('.icon-swatch').forEach(swatch => {
               if (!swatch.dataset.icon) return; // "none" always visible
-              swatch.hidden = !!q && !swatch.dataset.icon.includes(q);
+              // Match against stored name (mi/folder → "folder" for search)
+              const searchable = swatch.dataset.icon.replace(/^mi\//, '').replace(/_/g, ' ');
+              swatch.hidden = !!q && !searchable.includes(q);
             });
-            grid.querySelectorAll('.icon-picker-cat-sep').forEach(sep => {
+            // Hide category separators when their section is empty
+            grid.querySelectorAll('.icon-picker-cat-sep, .icon-picker-set-sep').forEach(sep => {
               if (!q) { sep.hidden = false; return; }
-              // Hide category header if no visible icons follow it
               let next = sep.nextElementSibling;
               let hasVisible = false;
-              while (next && !next.classList.contains('icon-picker-cat-sep')) {
+              while (next && !next.classList.contains('icon-picker-cat-sep') && !next.classList.contains('icon-picker-set-sep')) {
                 if (!next.hidden) { hasVisible = true; break; }
                 next = next.nextElementSibling;
               }
@@ -8675,10 +8694,16 @@ class CWMApp {
         <div class="workspace-accordion${isWsHidden ? ' hidden-item' : ''}" data-id="${ws.id}">
           <div class="workspace-item${isActive ? ' active' : ''}" data-id="${ws.id}" draggable="true" style="--ws-color: ${color}">
             <span class="ws-chevron${showBody ? ' open' : ''}">&#9654;</span>
-            ${ws.icon && window.__lucideIcons?.[ws.icon]
-              ? `<span class="workspace-icon" style="color: ${color}">${window.__lucideIcons[ws.icon]}</span>`
-              : `<div class="workspace-color-dot" style="background: ${color}"></div>`
-            }
+            ${(() => {
+              const iconSvg = ws.icon
+                ? (ws.icon.startsWith('mi/')
+                    ? window.__materialIcons?.[ws.icon.slice(3)]
+                    : window.__lucideIcons?.[ws.icon])
+                : null;
+              return iconSvg
+                ? `<span class="workspace-icon" style="color: ${color}">${iconSvg}</span>`
+                : `<div class="workspace-color-dot" style="background: ${color}"></div>`;
+            })()}
             <div class="workspace-info">
               <div class="workspace-name">${this.escapeHtml(ws.name)}<span class="ws-count-badge">${sessionCount}</span></div>
             </div>
