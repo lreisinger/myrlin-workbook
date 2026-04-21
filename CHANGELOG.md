@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.27] - 2026-04-21
+
+### Added
+
+- **Workspace icon picker with 2,331 icons** - Workspaces can now display a Lucide (140 curated) or Material Icon (2,191) in place of the color dot. Searchable grid with categories, icon inherits workspace color. Existing workspaces without icons continue to show the color dot unchanged. (PR #44 and #46 by @croakingtoad)
+- **Sidebar design polish** - Session count inline as pill badge (reduces vertical noise), active workspace left-bar uses per-workspace color, lighter italic directory group headers, sans-serif session names with inline right-aligned time, single "..." more button replacing separate rename/delete icons. (PR #44 by @croakingtoad)
+
+### Fixed
+
+- **Ctrl+V double-paste in terminal** - `attachCustomKeyEventHandler` returning false doesn't call `e.preventDefault()` on the DOM event, so the browser continued with native paste causing the text to send twice. Now calls `preventDefault()` in the Ctrl+V branch. Separate path from the v0.9.12 fix which only deduplicated beforeinput/paste events. (PR #45 by @croakingtoad)
+
 ## [0.9.26] - 2026-04-13
 
 ### Added
