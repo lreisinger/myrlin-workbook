@@ -374,8 +374,12 @@ class TerminalPane {
 
         // Ctrl+V / Cmd+V: paste from clipboard via WebSocket
         // Using explicit clipboard read instead of relying on browser paste event,
-        // which doesn't always fire reliably through xterm's hidden textarea
+        // which doesn't always fire reliably through xterm's hidden textarea.
+        // e.preventDefault() is required: returning false only stops xterm from
+        // handling the key but does NOT prevent the browser from also firing
+        // beforeinput(insertFromPaste) → paste, which would double-send via WS.
         if (mod && e.key === 'v') {
+          e.preventDefault();
           this.pasteFromClipboard();
           return false;
         }
