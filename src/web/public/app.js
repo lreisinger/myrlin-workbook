@@ -1369,11 +1369,17 @@ class CWMApp {
       const newTaskBtn = e.target.closest('.ws-new-task-btn');
       if (newTaskBtn) { e.stopPropagation(); this.openNewTaskDialog(newTaskBtn.dataset.wsId); return; }
 
-      const renameBtn = e.target.closest('.ws-rename-btn');
-      if (renameBtn) { e.stopPropagation(); this.renameWorkspace(renameBtn.dataset.id); return; }
-
-      const deleteBtn = e.target.closest('.ws-delete-btn');
-      if (deleteBtn) { e.stopPropagation(); this.deleteWorkspace(deleteBtn.dataset.id); return; }
+      const moreBtn = e.target.closest('.ws-more-btn');
+      if (moreBtn) {
+        e.stopPropagation();
+        const wsId = moreBtn.dataset.id;
+        const rect = moreBtn.getBoundingClientRect();
+        this._renderContextItems('Workspace', [
+          { icon: '✏️', label: 'Rename', action: () => this.renameWorkspace(wsId) },
+          { icon: '🗑️', label: 'Delete', danger: true, action: () => this.deleteWorkspace(wsId) },
+        ], rect.right, rect.bottom);
+        return;
+      }
 
       const wsSessionItem = e.target.closest('.ws-session-item');
       if (wsSessionItem) {
@@ -2193,6 +2199,7 @@ class CWMApp {
         { key: 'name', label: 'Name', placeholder: 'my-project', required: true },
         { key: 'description', label: 'Description', placeholder: 'What is this project for?', type: 'textarea' },
         { key: 'color', label: 'Color', type: 'color' },
+        { key: 'icon', label: 'Icon', type: 'icon' },
       ],
       confirmText: 'Create',
       confirmClass: 'btn-primary',
@@ -2220,6 +2227,7 @@ class CWMApp {
         { key: 'name', label: 'Name', value: ws.name, required: true },
         { key: 'description', label: 'Description', value: ws.description || '', type: 'textarea' },
         { key: 'color', label: 'Color', type: 'color', value: ws.color },
+        { key: 'icon', label: 'Icon', type: 'icon', value: ws.icon || '' },
       ],
       confirmText: 'Save',
       confirmClass: 'btn-primary',
@@ -7884,6 +7892,36 @@ class CWMApp {
             </div>`;
           return;
         }
+        if (f.type === 'icon') {
+          const allIcons = window.__lucideIcons || {};
+          const cats = window.__lucideIconCategories || {};
+          const selectedIcon = f.value || '';
+          let gridHtml = `<div class="icon-swatch icon-swatch-none${!selectedIcon ? ' selected' : ''}" data-icon="" title="No icon">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" stroke-dasharray="3 2"/></svg>
+          </div>`;
+          if (Object.keys(cats).length > 0) {
+            for (const [cat, names] of Object.entries(cats)) {
+              gridHtml += `<span class="icon-picker-cat-sep" data-cat="${this.escapeHtml(cat)}">${this.escapeHtml(cat)}</span>`;
+              for (const name of names) {
+                if (!allIcons[name]) continue;
+                gridHtml += `<div class="icon-swatch${selectedIcon === name ? ' selected' : ''}" data-icon="${this.escapeHtml(name)}" title="${this.escapeHtml(name)}">${allIcons[name]}</div>`;
+              }
+            }
+          } else {
+            for (const [name, svg] of Object.entries(allIcons)) {
+              gridHtml += `<div class="icon-swatch${selectedIcon === name ? ' selected' : ''}" data-icon="${this.escapeHtml(name)}" title="${this.escapeHtml(name)}">${svg}</div>`;
+            }
+          }
+          bodyHtml += `
+            <div class="input-group">
+              <label class="input-label">${f.label} <span class="field-optional">optional</span></label>
+              <div class="icon-picker" id="modal-field-${f.key}">
+                <input type="text" class="input icon-picker-search" placeholder="Search icons..." autocomplete="off" spellcheck="false">
+                <div class="icon-picker-grid">${gridHtml}</div>
+              </div>
+            </div>`;
+          return;
+        }
         if (f.type === 'checkbox') {
           const checked = f.value ? 'checked' : '';
           bodyHtml += `
@@ -7939,6 +7977,42 @@ class CWMApp {
         });
       });
 
+      // Icon picker behavior
+      const iconPickers = this.els.modalBody.querySelectorAll('.icon-picker');
+      iconPickers.forEach(picker => {
+        const grid = picker.querySelector('.icon-picker-grid');
+        const search = picker.querySelector('.icon-picker-search');
+        // Selection
+        grid.addEventListener('click', (e) => {
+          const swatch = e.target.closest('.icon-swatch');
+          if (!swatch) return;
+          grid.querySelectorAll('.icon-swatch').forEach(s => s.classList.remove('selected'));
+          swatch.classList.add('selected');
+        });
+        // Search filter
+        if (search) {
+          search.addEventListener('input', () => {
+            const q = search.value.toLowerCase().trim();
+            grid.querySelectorAll('.icon-swatch').forEach(swatch => {
+              if (!swatch.dataset.icon) return; // "none" always visible
+              swatch.hidden = !!q && !swatch.dataset.icon.includes(q);
+            });
+            grid.querySelectorAll('.icon-picker-cat-sep').forEach(sep => {
+              if (!q) { sep.hidden = false; return; }
+              // Hide category header if no visible icons follow it
+              let next = sep.nextElementSibling;
+              let hasVisible = false;
+              while (next && !next.classList.contains('icon-picker-cat-sep')) {
+                if (!next.hidden) { hasVisible = true; break; }
+                next = next.nextElementSibling;
+              }
+              sep.hidden = !hasVisible;
+            });
+          });
+          search.addEventListener('keydown', e => e.stopPropagation());
+        }
+      });
+
       // Re-enable confirm button (may have been disabled by previous modal interaction)
       this.els.modalConfirmBtn.disabled = false;
 
@@ -7951,6 +8025,9 @@ class CWMApp {
           if (f.type === 'color') {
             const selected = this.els.modalBody.querySelector(`#modal-field-${f.key} .color-swatch.selected`);
             result[f.key] = selected ? selected.dataset.color : 'mauve';
+          } else if (f.type === 'icon') {
+            const selected = this.els.modalBody.querySelector(`#modal-field-${f.key} .icon-swatch.selected`);
+            result[f.key] = (selected && selected.dataset.icon) ? selected.dataset.icon : null;
           } else if (f.type === 'checkbox') {
             const el = document.getElementById(`modal-field-${f.key}`);
             if (el) result[f.key] = el.checked;
@@ -8547,12 +8624,13 @@ class CWMApp {
           : '';
 
         // Build meta row (badges + size + time) — only if there's something to show
-        const metaParts = [badges, sizeStr ? `<span class="ws-session-size">${sizeStr}</span>` : '', timeStr ? `<span class="ws-session-time">${timeStr}</span>` : ''].filter(Boolean).join('');
+        const metaParts = [badges, sizeStr ? `<span class="ws-session-size">${sizeStr}</span>` : ''].filter(Boolean).join('');
         const metaRow = metaParts ? `<div class="ws-session-meta-row">${metaParts}</div>` : '';
+        const timeEl = timeStr ? `<span class="ws-session-time">${timeStr}</span>` : '';
 
         return `<div class="ws-session-item${isHidden ? ' ws-session-hidden' : ''}" data-session-id="${s.id}" draggable="true" title="${this.escapeHtml(s.workingDir || '')}">
           <span class="ws-session-dot${tristateAttr}" style="background: ${statusDot}"></span>${pip}
-          <span class="ws-session-name">${this.escapeHtml(name)}</span>
+          <span class="ws-session-name">${this.escapeHtml(name)}</span>${timeEl}
           ${metaRow}
         </div>`;
       };
@@ -8595,25 +8673,18 @@ class CWMApp {
 
       return `
         <div class="workspace-accordion${isWsHidden ? ' hidden-item' : ''}" data-id="${ws.id}">
-          <div class="workspace-item${isActive ? ' active' : ''}" data-id="${ws.id}" draggable="true">
+          <div class="workspace-item${isActive ? ' active' : ''}" data-id="${ws.id}" draggable="true" style="--ws-color: ${color}">
             <span class="ws-chevron${showBody ? ' open' : ''}">&#9654;</span>
-            <div class="workspace-color-dot" style="background: ${color}"></div>
+            ${ws.icon && window.__lucideIcons?.[ws.icon]
+              ? `<span class="workspace-icon" style="color: ${color}">${window.__lucideIcons[ws.icon]}</span>`
+              : `<div class="workspace-color-dot" style="background: ${color}"></div>`
+            }
             <div class="workspace-info">
-              <div class="workspace-name">${this.escapeHtml(ws.name)}</div>
-              <div class="workspace-session-count">${sessionCount} session${sessionCount !== 1 ? 's' : ''}</div>
+              <div class="workspace-name">${this.escapeHtml(ws.name)}<span class="ws-count-badge">${sessionCount}</span></div>
             </div>
             <div class="workspace-actions">
               ${this.state.settings.enableWorktreeTasks ? `<button class="btn btn-ghost btn-icon btn-sm ws-new-task-btn" data-ws-id="${ws.id}" title="New Task">+</button>` : ''}
-              <button class="btn btn-ghost btn-icon btn-sm ws-rename-btn" data-id="${ws.id}" title="Edit">
-                <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-                  <path d="M8.5 2.5l3 3M2 9.5V12h2.5L11 5.5l-3-3L2 9.5z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </button>
-              <button class="btn btn-ghost btn-icon btn-sm btn-danger-hover ws-delete-btn" data-id="${ws.id}" title="Delete">
-                <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-                  <path d="M2.5 4h9M5 4V2.5h4V4M3.5 4v7.5a1 1 0 001 1h5a1 1 0 001-1V4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </button>
+              <button class="btn btn-ghost btn-icon btn-sm ws-more-btn" data-id="${ws.id}" title="More actions">&#8230;</button>
             </div>
           </div>
           <div class="workspace-accordion-body"${showBody ? '' : ' hidden'}>
