@@ -859,6 +859,39 @@ app.put('/api/workspaces/:id/td/repodir', requireAuth, (req, res) => {
 });
 
 /**
+ * GET /api/td/projects
+ * Return all workspaces that have td initialized, with their resolved repo dirs.
+ * Used by the Tasks > td panel dropdown.
+ */
+app.get('/api/td/projects', requireAuth, (req, res) => {
+  const store = getStore();
+  const allWorkspaces = store.getAllWorkspacesList();
+  const projects = [];
+  for (const ws of allWorkspaces) {
+    const repoDir = resolveTdRepoDir(store, ws.id);
+    if (repoDir && td.isInitialized(repoDir)) {
+      projects.push({ name: ws.name, repoDir, workspaceId: ws.id });
+    }
+  }
+  return res.json({ projects });
+});
+
+/**
+ * GET /api/td/issues?dir=<path>
+ * List td issues for an explicit repo directory (not workspace-scoped).
+ * Allows the Tasks panel to show issues for whatever dir is focused.
+ * Query: ?dir=<absolute-path>, ?status=open|in_progress|...
+ */
+app.get('/api/td/issues', requireAuth, async (req, res) => {
+  const dir = req.query.dir ? decodeURIComponent(req.query.dir) : null;
+  if (!dir) return res.status(400).json({ error: 'dir query parameter required.' });
+  if (!td.isInitialized(dir)) return res.status(400).json({ error: 'td is not initialized in this directory.' });
+  const filters = req.query.status ? { status: req.query.status } : {};
+  const issues = await td.listIssues(dir, filters, getTdBinary());
+  return res.json({ issues, repoDir: dir });
+});
+
+/**
  * GET /api/workspaces/:id/td/issues
  * List td issues for this workspace's repo.
  * Query: ?status=open|in_progress|in_review|blocked|closed (optional filter)

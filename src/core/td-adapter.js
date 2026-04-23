@@ -82,7 +82,8 @@ async function listIssues(cwd, filters = {}, binary = DEFAULT_TD_BINARY) {
   if (filters.status) args.push('--status', filters.status);
   const { stdout } = await runTd(binary, args, cwd);
   const parsed = JSON.parse(stdout);
-  // td --json returns either an array or { issues: [...] }
+  // td --json returns either an array, { issues: [...] }, or null (empty repo)
+  if (!parsed) return [];
   return Array.isArray(parsed) ? parsed : (parsed.issues || []);
 }
 
