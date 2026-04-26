@@ -6321,6 +6321,20 @@ html.activity-indicators-disabled .terminal-pane-activity {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* td panel needs its toolbar fixed at top, list scrolls below */
+#tasks-td-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#tasks-td-panel .tasks-td-toolbar { flex-shrink: 0; }
+#tasks-td-panel .tasks-td-group-header,
+#tasks-td-panel .tasks-td-row,
+#tasks-td-panel .tasks-placeholder {
+  flex-shrink: 0;
 }
 
 /* ── Placeholder / empty states ──────────────────────── */
@@ -6393,6 +6407,40 @@ html.activity-indicators-disabled .terminal-pane-activity {
 .td-priority-badge.priority-p1 { background: var(--peach);  color: var(--base); }
 .td-priority-badge.priority-p2 { background: var(--yellow); color: var(--base); }
 .td-priority-badge.priority-p3 { background: var(--surface2); color: var(--text); }
+
+/* ── td panel project switcher toolbar ───────────────── */
+.tasks-td-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--surface1);
+  background: var(--mantle);
+  flex-shrink: 0;
+}
+.tasks-td-toolbar-label {
+  font-size: 11px;
+  color: var(--subtext0);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.tasks-td-project-select {
+  flex: 1;
+  font-size: 12px;
+  background: var(--surface0);
+  color: var(--text);
+  border: 1px solid var(--surface2);
+  border-radius: 4px;
+  padding: 2px 6px;
+  min-width: 0;
+  cursor: pointer;
+}
+.tasks-td-project-select:focus { outline: none; border-color: var(--mauve); }
+.tasks-td-refresh {
+  font-size: 14px;
+  padding: 2px 6px;
+  flex-shrink: 0;
+}
 
 /* ─── New Task Dialog form elements ──────────────────── */
 .form-group {

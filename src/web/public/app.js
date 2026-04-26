@@ -4763,12 +4763,82 @@ class CWMApp {
     if (name === 'files') this.renderTasksFilesPanel();
   }
 
-  async renderTasksTdPanel() {
-    const panel = document.getElementById('tasks-td-panel');
+  /**
+   * Render the project switcher toolbar inside a td panel toolbar element.
+   * Populates a <select> from this._tdProjects (loaded async).
+   * @param {HTMLElement} toolbar
+   * @param {string} currentDir - the currently shown repo dir
+   */
+  _renderTdToolbar(toolbar, currentDir) {
+    toolbar.textContent = '';
+    const label = document.createElement('span');
+    label.className = 'tasks-td-toolbar-label';
+    label.textContent = 'Project';
+    toolbar.appendChild(label);
+
+    const sel = document.createElement('select');
+    sel.className = 'tasks-td-project-select';
+
+    const projects = this._tdProjects || [];
+
+    // Always include the current dir even if not yet in projects list
+    const allDirs = new Map();
+    allDirs.set(currentDir, this._tdProjectName(currentDir));
+    for (const p of projects) allDirs.set(p.repoDir, p.name || this._tdProjectName(p.repoDir));
+
+    for (const [dir, name] of allDirs) {
+      const opt = document.createElement('option');
+      opt.value = dir;
+      opt.textContent = name;
+      opt.selected = dir === currentDir;
+      sel.appendChild(opt);
+    }
+
+    sel.addEventListener('change', () => {
+      this._tdPanelDir = sel.value;
+      // Mark as manually pinned so pane focus changes don't override the selection
+      this._tdPanelDirPinned = (sel.value !== this._getTdPanelDir());
+      this.renderTasksTdPanel();
+    });
+
+    toolbar.appendChild(sel);
+
+    // Refresh button
+    const refreshBtn = document.createElement('button');
+    refreshBtn.className = 'btn btn-ghost btn-icon btn-sm tasks-td-refresh';
+    refreshBtn.title = 'Refresh';
+    refreshBtn.innerHTML = '&#8635;';
+    refreshBtn.addEventListener('click', () => this.renderTasksTdPanel());
+    toolbar.appendChild(refreshBtn);
+  }
+
+  /** Extract a short project name from a directory path */
+  _tdProjectName(dir) {
+    if (!dir) return '(unknown)';
+    return dir.split('/').filter(Boolean).pop() || dir;
+  }
+
+  /**
+   * Resolve the td repo dir for the currently focused terminal pane.
+   * Falls back to the active workspace's resolved dir.
+   * Returns null if nothing useful found.
+   */
+  _getTdPanelDir() {
+    // 1. Prefer the focused terminal pane's working dir
+    const slot = this._activeTerminalSlot;
+    const tp = slot !== null ? this.terminalPanes[slot] : null;
+    if (tp && tp.spawnOpts && tp.spawnOpts.cwd) return tp.spawnOpts.cwd;
+    // 2. Fall back to any open pane's cwd
+    for (const p of this.terminalPanes) {
+      if (p && p.spawnOpts && p.spawnOpts.cwd) return p.spawnOpts.cwd;
+    }
+    return null;
+  }
+
+  async renderTasksTdPanel(container = null) {
+    const panel = container || document.getElementById('tasks-td-panel');
     if (!panel) return;
     if (!this.getSetting('enableTd')) return;
-
-    const ws = this.state.activeWorkspace;
 
     const showPlaceholder = (msg, isError) => {
       panel.textContent = '';
@@ -4778,23 +4848,43 @@ class CWMApp {
       panel.appendChild(el);
     };
 
-    if (!ws) {
-      showPlaceholder('No active project selected', false);
+    // Determine which dir to show: manually selected > active pane > nothing
+    const autoDir = this._getTdPanelDir();
+    if (!this._tdPanelDir && autoDir) this._tdPanelDir = autoDir;
+    const dir = this._tdPanelDir;
+
+    if (!dir) {
+      showPlaceholder('Open a project in a terminal pane to see its td issues', false);
       return;
     }
 
     showPlaceholder('Loading td issues\u2026', false);
 
+    // Load projects list for dropdown (non-blocking, updates after issues load)
+    this.api('GET', '/api/td/projects').then(projectsData => {
+      this._tdProjects = projectsData.projects || [];
+      // Re-render toolbar if panel is still showing the td view
+      const toolbar = panel.querySelector('.tasks-td-toolbar');
+      if (toolbar) this._renderTdToolbar(toolbar, dir);
+    }).catch(() => {});
+
     try {
-      const data = await this.api('GET', `/api/workspaces/${ws.id}/td/issues`);
+      const data = await this.api('GET', `/api/td/issues?dir=${encodeURIComponent(dir)}`);
       const issues = data.issues || [];
 
+      panel.textContent = '';
+      const toolbar = document.createElement('div');
+      toolbar.className = 'tasks-td-toolbar';
+      this._renderTdToolbar(toolbar, dir);
+      panel.appendChild(toolbar);
+
       if (issues.length === 0) {
-        showPlaceholder('No open td issues for this project', false);
+        const empty = document.createElement('div');
+        empty.className = 'tasks-placeholder';
+        empty.textContent = 'No open td issues for this project';
+        panel.appendChild(empty);
         return;
       }
-
-      panel.textContent = '';
 
       // Group by status in display order
       const STATUS_ORDER = ['in_progress', 'in_review', 'blocked', 'open'];
@@ -4869,6 +4959,10 @@ class CWMApp {
       if (msg.includes('not initialized')) {
         // td isn't initialized — show a helpful prompt rather than a raw error
         panel.textContent = '';
+        const toolbar = document.createElement('div');
+        toolbar.className = 'tasks-td-toolbar';
+        this._renderTdToolbar(toolbar, dir);
+        panel.appendChild(toolbar);
         const wrap = document.createElement('div');
         wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:12px;padding:32px 24px;';
         const info = document.createElement('div');
@@ -4877,7 +4971,7 @@ class CWMApp {
         info.textContent = 'td is not initialized for this project.';
         const hint = document.createElement('div');
         hint.style.cssText = 'font-size:12px;color:var(--subtext0);text-align:center;';
-        hint.textContent = 'Run td init in the project root to enable task tracking. If this repo uses a git worktree, td should be initialized in the main repo.';
+        hint.textContent = 'Run td init in the project root to enable task tracking.';
         const initBtn = document.createElement('button');
         initBtn.className = 'btn btn-primary btn-sm';
         initBtn.textContent = 'Run td init';
@@ -4885,7 +4979,14 @@ class CWMApp {
           initBtn.disabled = true;
           initBtn.textContent = 'Initializing\u2026';
           try {
-            await this.api('POST', `/api/workspaces/${ws.id}/td/init`, {});
+            // Use the workspace-scoped init if we can find the ws, otherwise use the dir directly
+            const ws = this.state.activeWorkspace;
+            if (ws) {
+              await this.api('POST', `/api/workspaces/${ws.id}/td/init`, { repoDir: dir });
+            } else {
+              // Fallback: run td init via a generic endpoint if workspace isn't known
+              throw new Error('No active workspace to run td init against. Run `td init` manually in ' + dir);
+            }
             this.renderTasksTdPanel();
           } catch (e) {
             initBtn.disabled = false;
@@ -10991,6 +11092,15 @@ class CWMApp {
     if (tp) {
       tp.setFocused(true);
       tp.focus();
+    }
+
+    // If Tasks > td tab is visible and not manually pinned, update to this pane's project
+    if (this._activeTasksTab === 'td' && !this._tdPanelDirPinned) {
+      const newDir = tp && tp.spawnOpts && tp.spawnOpts.cwd ? tp.spawnOpts.cwd : null;
+      if (newDir && newDir !== this._tdPanelDir) {
+        this._tdPanelDir = newDir;
+        this.renderTasksTdPanel();
+      }
     }
   }
 
