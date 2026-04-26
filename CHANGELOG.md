@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.28] - 2026-04-24
+
+### Added
+
+- **td panel active pane tracking** - Tasks > td tab now defaults to the focused terminal pane's project directory. New project dropdown in the toolbar lets you manually pin a specific td-initialized repo (won't follow pane changes after manual selection). Refresh button forces reload. New endpoints: `GET /api/td/projects` and `GET /api/td/issues?dir=<path>`. (PR #47 by @croakingtoad)
+- **Save to Notes + Pinned Notes** - Right-click selected text in a terminal to save it as a note in workspace Docs > Notes with timestamp. Each note can be pinned to a specific terminal session via the pin button. Panes with pinned notes show a badge with count; clicking opens a master/detail modal. Persistent storage in `~/.myrlin/pinned-notes/`. (PR #48 by @croakingtoad)
+
+### Fixed
+
+- **td list crash on empty repos** - `td list --json` returns `null` on repos with no issues, causing `Cannot read properties of null (reading 'issues')`. Added null guard. (PR #47 by @croakingtoad)
+
 ## [0.9.27] - 2026-04-21
 
 ### Added
