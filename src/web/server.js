@@ -751,6 +751,151 @@ app.delete('/api/workspaces/:id/docs/:section/:index', requireAuth, (req, res) =
 });
 
 // ──────────────────────────────────────────────────────────
+//  PINNED NOTES
+//  Per-session pinned note indices, persisted as JSON files
+//  under ~/.myrlin/pinned-notes/{workspaceId}.json
+//  Format: { [sessionId]: [noteIndex, ...] }
+// ──────────────────────────────────────────────────────────
+
+/**
+ * Return the directory used to store pinned-note files.
+ * Creates it if it does not already exist.
+ * @returns {string}
+ */
+function getPinnedNotesDir() {
+  const dir = path.join(getDataDir(), 'pinned-notes');
+  require('fs').mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/**
+ * Read the pinned-notes map for a workspace from disk.
+ * Returns {} if the file does not exist or cannot be parsed.
+ * @param {string} workspaceId
+ * @returns {{ [sessionId: string]: number[] }}
+ */
+function getPinnedNotes(workspaceId) {
+  const file = path.join(getPinnedNotesDir(), `${workspaceId}.json`);
+  try {
+    const raw = require('fs').readFileSync(file, 'utf-8');
+    return JSON.parse(raw);
+  } catch (_) {
+    return {};
+  }
+}
+
+/**
+ * Atomically write the pinned-notes map for a workspace.
+ * Writes to a temp file then renames to ensure no partial reads.
+ * @param {string} workspaceId
+ * @param {{ [sessionId: string]: number[] }} data
+ */
+function savePinnedNotes(workspaceId, data) {
+  const fs = require('fs');
+  const dir = getPinnedNotesDir();
+  const file = path.join(dir, `${workspaceId}.json`);
+  const tmp = path.join(dir, `.tmp.${Date.now()}.${workspaceId}.json`);
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
+  fs.renameSync(tmp, file);
+}
+
+/**
+ * Add noteIndex to the pinned list for sessionId, deduplicating.
+ * @param {string} wsId
+ * @param {string} sessionId
+ * @param {number} noteIndex
+ */
+function pin(wsId, sessionId, noteIndex) {
+  const data = getPinnedNotes(wsId);
+  const existing = data[sessionId] || [];
+  if (!existing.includes(noteIndex)) {
+    existing.push(noteIndex);
+  }
+  data[sessionId] = existing;
+  savePinnedNotes(wsId, data);
+}
+
+/**
+ * Remove noteIndex from the pinned list for sessionId.
+ * @param {string} wsId
+ * @param {string} sessionId
+ * @param {number} noteIndex
+ */
+function unpin(wsId, sessionId, noteIndex) {
+  const data = getPinnedNotes(wsId);
+  if (!data[sessionId]) return;
+  data[sessionId] = data[sessionId].filter(i => i !== noteIndex);
+  savePinnedNotes(wsId, data);
+}
+
+/**
+ * GET /api/workspaces/:id/pinned-notes
+ * Returns the full pinned-notes map: { [sessionId]: [noteIndex, ...] }
+ */
+app.get('/api/workspaces/:id/pinned-notes', requireAuth, (req, res) => {
+  const store = getStore();
+  const ws = store.getWorkspace(req.params.id);
+  if (!ws) return res.status(404).json({ error: 'Workspace not found.' });
+
+  const data = getPinnedNotes(req.params.id);
+  return res.json(data);
+});
+
+/**
+ * POST /api/workspaces/:id/pinned-notes
+ * Body: { sessionId, noteIndex, action: 'pin' | 'unpin' }
+ * Pins or unpins a note index for a session.
+ */
+app.post('/api/workspaces/:id/pinned-notes', requireAuth, (req, res) => {
+  const store = getStore();
+  const ws = store.getWorkspace(req.params.id);
+  if (!ws) return res.status(404).json({ error: 'Workspace not found.' });
+
+  const { sessionId, noteIndex, action } = req.body || {};
+  if (!sessionId || noteIndex === undefined || noteIndex === null) {
+    return res.status(400).json({ error: 'sessionId and noteIndex are required.' });
+  }
+  const idx = parseInt(noteIndex, 10);
+  if (isNaN(idx) || idx < 0) {
+    return res.status(400).json({ error: 'noteIndex must be a non-negative integer.' });
+  }
+
+  if (action === 'unpin') {
+    unpin(req.params.id, sessionId, idx);
+  } else {
+    pin(req.params.id, sessionId, idx);
+  }
+  return res.json({ success: true });
+});
+
+/**
+ * GET /api/workspaces/:id/pinned-notes/:sessionId
+ * Returns resolved note objects for the session's pinned indices.
+ * Response: { notes: [{ text, timestamp }, ...] }
+ * Returns empty array (not 404) if the session has no pins.
+ */
+app.get('/api/workspaces/:id/pinned-notes/:sessionId', requireAuth, (req, res) => {
+  const store = getStore();
+  const ws = store.getWorkspace(req.params.id);
+  if (!ws) return res.status(404).json({ error: 'Workspace not found.' });
+
+  const data = getPinnedNotes(req.params.id);
+  const indices = data[req.params.sessionId] || [];
+
+  if (indices.length === 0) {
+    return res.json({ notes: [] });
+  }
+
+  const docs = store.getWorkspaceDocs(req.params.id);
+  const allNotes = (docs && docs.notes) ? docs.notes : [];
+  const notes = indices
+    .filter(i => i >= 0 && i < allNotes.length)
+    .map(i => ({ text: allNotes[i].text, timestamp: allNotes[i].timestamp }));
+
+  return res.json({ notes });
+});
+
+// ──────────────────────────────────────────────────────────
 //  TD TASK INTEGRATION
 //  These endpoints bridge myrlin's docs panel to the `td` CLI
 //  (github.com/marcus/td). All td commands run in the context

@@ -4313,6 +4313,19 @@ textarea.input {
   color: var(--red);
 }
 
+.doc-pin-btn {
+  opacity: 0.4;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.doc-pin-btn:hover,
+.doc-pin-btn.pinned {
+  opacity: 1;
+  color: var(--mauve);
+}
+
 /* Roadmap items */
 .roadmap-status-dot {
   background: none;
@@ -5030,6 +5043,15 @@ textarea.input {
 /* Respect reduced motion for mic pulse */
 @media (prefers-reduced-motion: reduce) {
   .terminal-pane-mic.mic-active { animation: none; }
+}
+.pane-pin-count {
+  font-size: 10px;
+  background: var(--mauve);
+  color: var(--base);
+  border-radius: 8px;
+  padding: 0 4px;
+  margin-left: 2px;
+  font-weight: 600;
 }
 /* Voice interim transcript overlay - shown at bottom of terminal pane during recording */
 .voice-interim-overlay {
