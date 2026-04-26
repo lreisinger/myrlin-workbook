@@ -722,6 +722,77 @@ test('AUTH_PASSWORD is not exported from auth module', () => {
 });
 
 // ──────────────────────────────────────────────────────
+// Discovery - Custom Title Extraction
+// ──────────────────────────────────────────────────────
+
+suite('Discovery - extractCustomTitle');
+
+const { extractCustomTitle } = require('../src/web/server');
+const tmpDir = path.join(__dirname, '..', 'state', '_test_jsonl');
+if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+
+function writeTmpJsonl(name, lines) {
+  const p = path.join(tmpDir, name);
+  fs.writeFileSync(p, lines.join('\n'), 'utf8');
+  return p;
+}
+
+test('extracts title from a single custom-title entry', () => {
+  const p = writeTmpJsonl('single.jsonl', [
+    '{"type":"permission-mode","permissionMode":"default","sessionId":"aaa"}',
+    '{"type":"custom-title","customTitle":"my-feature","sessionId":"aaa"}',
+    '{"type":"user","message":{"role":"user","content":"hello"}}',
+  ]);
+  assertEqual(extractCustomTitle(p), 'my-feature');
+});
+
+test('returns the last title when renamed', () => {
+  const p = writeTmpJsonl('renamed.jsonl', [
+    '{"type":"custom-title","customTitle":"old-name","sessionId":"bbb"}',
+    '{"type":"user","message":{"role":"user","content":"do stuff"}}',
+    '{"type":"custom-title","customTitle":"new-name","sessionId":"bbb"}',
+  ]);
+  assertEqual(extractCustomTitle(p), 'new-name');
+});
+
+test('returns null when no custom-title exists', () => {
+  const p = writeTmpJsonl('notitle.jsonl', [
+    '{"type":"permission-mode","permissionMode":"default","sessionId":"ccc"}',
+    '{"type":"user","message":{"role":"user","content":"hello"}}',
+  ]);
+  assertEqual(extractCustomTitle(p), null);
+});
+
+test('returns null for malformed JSON on custom-title line', () => {
+  const p = writeTmpJsonl('malformed.jsonl', [
+    '{"type":"permission-mode","sessionId":"ddd"}',
+    '{"type":"custom-title" BROKEN JSON',
+  ]);
+  assertEqual(extractCustomTitle(p), null);
+});
+
+test('returns null for nonexistent file', () => {
+  assertEqual(extractCustomTitle(path.join(tmpDir, 'nonexistent.jsonl')), null);
+});
+
+test('finds title in tail of large file', () => {
+  // Pad with 20KB of filler lines so the title is only in the last 16KB
+  const filler = [];
+  for (let i = 0; i < 200; i++) {
+    filler.push(`{"type":"user","message":{"role":"user","content":"${'x'.repeat(100)}"}}`);
+  }
+  filler.push('{"type":"custom-title","customTitle":"deep-title","sessionId":"eee"}');
+  const p = writeTmpJsonl('large.jsonl', filler);
+  assertEqual(extractCustomTitle(p), 'deep-title');
+});
+
+// Clean up temp files
+try {
+  for (const f of fs.readdirSync(tmpDir)) fs.unlinkSync(path.join(tmpDir, f));
+  fs.rmdirSync(tmpDir);
+} catch (_) {}
+
+// ──────────────────────────────────────────────────────
 // Results
 
 console.log('\n  ' + '─'.repeat(42));
