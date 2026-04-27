@@ -7245,7 +7245,7 @@ function extractCustomTitle(jsonlPath) {
     const fd = fs.openSync(jsonlPath, 'r');
     try {
       const size = fs.fstatSync(fd).size;
-      const tailSize = Math.min(16384, size);
+      const tailSize = Math.min(131072, size);
       const buf = Buffer.alloc(tailSize);
       fs.readSync(fd, buf, 0, tailSize, size - tailSize);
       const lines = buf.toString('utf8').split('\n');
