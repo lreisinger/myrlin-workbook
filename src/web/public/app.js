@@ -3109,10 +3109,16 @@ class CWMApp {
           this.showToast('Select or create a project first', 'warning');
           return;
         }
-        // Use project folder name as friendly default name instead of raw UUID
-        const projectName = projectPath ? projectPath.split('\\').pop() || projectPath.split('/').pop() || sessionName : sessionName;
-        const shortId = sessionName.length > 8 ? sessionName.substring(0, 8) : sessionName;
-        const friendlyName = projectName + ' (' + shortId + ')';
+        // Prefer custom title from Claude session, fall back to folder name + short UUID
+        const customTitle = this.getProjectSessionTitle(sessionName);
+        let friendlyName;
+        if (customTitle) {
+          friendlyName = customTitle;
+        } else {
+          const projectName = projectPath ? projectPath.split('\\').pop() || projectPath.split('/').pop() || sessionName : sessionName;
+          const shortId = sessionName.length > 8 ? sessionName.substring(0, 8) : sessionName;
+          friendlyName = projectName + ' (' + shortId + ')';
+        }
         this.api('POST', '/api/sessions', {
           name: friendlyName,
           workspaceId: this.state.activeWorkspace.id,
@@ -9592,6 +9598,11 @@ class CWMApp {
       const sessionItems = sessions.map(s => {
         const sessName = s.name || 'unnamed';
         const claudeTitle = s.title || null;
+        if (claudeTitle && !this.getProjectSessionTitle(sessName)) {
+          const titles = JSON.parse(localStorage.getItem('cwm_projectSessionTitles') || '{}');
+          titles[sessName] = claudeTitle;
+          localStorage.setItem('cwm_projectSessionTitles', JSON.stringify(titles));
+        }
         const storedTitle = this.getProjectSessionTitle(sessName);
         const displayName = storedTitle || claudeTitle || (sessName.length > 24 ? sessName.substring(0, 24) + '...' : sessName);
         const sessSize = s.size ? this.formatSize(s.size) : '';
