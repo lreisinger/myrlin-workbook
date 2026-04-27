@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.29] - 2026-04-27
+
+### Added
+
+- **Session titles in discovered panel** - Discovered sidebar now shows Claude's custom session names (e.g. "fix-auth-issues") instead of truncated UUIDs. Reads last 128KB of JSONL via positioned tail read with reverse scan to find the most recent `custom-title` entry. Sidebar filter, Find a Conversation, and "Add to Project" all use the title. (PR #50 by @trevorh)
+
+### Fixed
+
+- **API key, AI session finder, voice punctuation broken** - Three endpoints called `store.getState()` which doesn't exist; the Store exposes `state` as a getter property. Fixed all three call sites. (PR #50 by @trevorh)
+- **Project paths with hook attachments resolved as missing** - 4KB head buffer in `getOriginalPathFromJsonl` was too small for hook attachment entries on line 2, truncating JSON.parse and causing path lookup to fail. Raised to 16KB with a string pre-filter. (PR #50 by @trevorh)
+- **Greyed-out projects despite existing directories** - Stub sessions (1-line permission-mode only) lack a `cwd` field. Now tries multiple JSONL files in the project directory instead of only the first alphabetical one. (PR #50 by @trevorh)
+
 ## [0.9.28] - 2026-04-24
 
 ### Added
