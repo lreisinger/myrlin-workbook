@@ -1646,6 +1646,13 @@ app.get('/api/discover', requireAuth, (req, res) => {
         // skip if can't read
       }
 
+      // Extract the last custom-title from each JSONL file
+      const sessionTitles = {};
+      for (const sf of sessionFiles) {
+        const title = extractCustomTitle(path.join(projectDir, sf.name + '.jsonl'));
+        if (title) sessionTitles[sf.name] = title;
+      }
+
       // Check for CLAUDE.md
       let hasClaudeMd = false;
       try {
@@ -1672,7 +1679,7 @@ app.get('/api/discover', requireAuth, (req, res) => {
         sessionCount: sessionFiles.length,
         totalSize,
         lastActive: sessionFiles.length > 0 ? sessionFiles[0].modified : null,
-        sessions: sessionFiles.map(s => ({ name: s.name, modified: s.modified, size: s.size })),
+        sessions: sessionFiles.map(s => ({ name: s.name, modified: s.modified, size: s.size, title: sessionTitles[s.name] || null })),
       });
     }
 
@@ -1801,48 +1808,34 @@ function greedyFsWalk(root, tokens) {
  */
 function getOriginalPathFromJsonl(projectDir) {
   try {
-    const files = fs.readdirSync(projectDir);
-    // Find the first .jsonl file (skip subdirectories)
-    const jsonlFile = files.find(f => {
+    const jsonlFiles = fs.readdirSync(projectDir).filter(f => {
       if (!f.endsWith('.jsonl')) return false;
-      try {
-        return !fs.statSync(path.join(projectDir, f)).isDirectory();
-      } catch (_) {
-        return false;
-      }
+      try { return !fs.statSync(path.join(projectDir, f)).isDirectory(); } catch (_) { return false; }
     });
-    if (!jsonlFile) return null;
 
-    const jsonlPath = path.join(projectDir, jsonlFile);
-
-    // Only read first 4KB to find cwd field (avoids loading large files)
-    const fd = fs.openSync(jsonlPath, 'r');
-    const buffer = Buffer.alloc(4096);
-    let content;
-    try {
-      const bytesRead = fs.readSync(fd, buffer, 0, 4096, 0);
-      content = buffer.toString('utf-8', 0, bytesRead);
-    } finally {
-      fs.closeSync(fd);
-    }
-
-    // Parse first 3 lines to find cwd field
-    const lines = content.split('\n').slice(0, 3);
-    for (const line of lines) {
-      if (!line.trim()) continue;
+    // Try each file until one yields a cwd — stub sessions may lack it
+    for (const jsonlFile of jsonlFiles) {
       try {
-        const record = JSON.parse(line);
-        if (record.cwd && typeof record.cwd === 'string') {
-          return record.cwd;
+        const fd = fs.openSync(path.join(projectDir, jsonlFile), 'r');
+        let content;
+        try {
+          const buffer = Buffer.alloc(16384);
+          const bytesRead = fs.readSync(fd, buffer, 0, 16384, 0);
+          content = buffer.toString('utf-8', 0, bytesRead);
+        } finally {
+          fs.closeSync(fd);
         }
-      } catch (_) {
-        // Skip invalid JSON lines
-        continue;
-      }
+
+        for (const line of content.split('\n')) {
+          if (!line.includes('"cwd"')) continue;
+          try {
+            const record = JSON.parse(line);
+            if (record.cwd && typeof record.cwd === 'string') return record.cwd;
+          } catch (_) { continue; }
+        }
+      } catch (_) { continue; }
     }
-  } catch (_) {
-    // Silently fail and return null
-  }
+  } catch (_) {}
   return null;
 }
 
@@ -2524,7 +2517,7 @@ app.post('/api/search-conversations', requireAuth, async (req, res) => {
  */
 app.get('/api/keys/anthropic', requireAuth, (req, res) => {
   const store = getStore();
-  const key = (store.getState().settings || {}).anthropicApiKey || '';
+  const key = (store.state.settings || {}).anthropicApiKey || '';
   if (!key) return res.json({ configured: false, masked: null });
   const masked = '...' + key.slice(-8);
   return res.json({ configured: true, masked });
@@ -2560,7 +2553,7 @@ app.post('/api/ai/punctuate', requireAuth, async (req, res) => {
   }
 
   const store = getStore();
-  const apiKey = (store.getState().settings || {}).anthropicApiKey || '';
+  const apiKey = (store.state.settings || {}).anthropicApiKey || '';
   if (!apiKey) {
     return res.status(400).json({ error: 'No Anthropic API key configured' });
   }
@@ -2612,7 +2605,7 @@ app.post('/api/ai/find-session', requireAuth, async (req, res) => {
   }
 
   const store = getStore();
-  const apiKey = (store.getState().settings || {}).anthropicApiKey || '';
+  const apiKey = (store.state.settings || {}).anthropicApiKey || '';
 
   // Gather all metadata
   const workspaces = store.getAllWorkspacesList();
@@ -2631,6 +2624,7 @@ app.post('/api/ai/find-session', requireAuth, async (req, res) => {
         const name = getProjectDisplayName(d.name, realPath);
         let sessionCount = 0;
         let lastActive = null;
+        const sessionTitles = [];
         try {
           const files = fs.readdirSync(projectDir).filter(f => f.endsWith('.jsonl'));
           sessionCount = files.length;
@@ -2639,9 +2633,11 @@ app.post('/api/ai/find-session', requireAuth, async (req, res) => {
               const stat = fs.statSync(path.join(projectDir, f));
               if (!lastActive || stat.mtime > new Date(lastActive)) lastActive = stat.mtime;
             } catch (_) {}
+            const title = extractCustomTitle(path.join(projectDir, f));
+            if (title) sessionTitles.push(title);
           }
         } catch (_) {}
-        return { encodedName: d.name, name, path: realPath, sessionCount, lastActive };
+        return { encodedName: d.name, name, path: realPath, sessionCount, lastActive, sessionTitles };
       });
     } catch (_) {}
   }
@@ -2658,7 +2654,8 @@ app.post('/api/ai/find-session', requireAuth, async (req, res) => {
     })),
     discoveredProjects: discoveredProjects.map(p => ({
       encodedName: p.encodedName, name: p.name, path: p.path,
-      sessionCount: p.sessionCount, lastActive: p.lastActive
+      sessionCount: p.sessionCount, lastActive: p.lastActive,
+      sessionTitles: p.sessionTitles
     }))
   };
 
@@ -2722,9 +2719,9 @@ app.post('/api/ai/find-session', requireAuth, async (req, res) => {
       if (score > 0.2) scored.push({ type: 'session', id: s.id, confidence: score, summary: 'Matched by name, topic, or path' });
     }
     for (const p of discoveredProjects) {
-      const text = `${p.name} ${p.path}`.toLowerCase();
+      const text = `${p.name} ${p.path} ${(p.sessionTitles || []).join(' ')}`.toLowerCase();
       const score = terms.filter(t => text.includes(t)).length / terms.length;
-      if (score > 0.2) scored.push({ type: 'project', id: p.encodedName, confidence: score, summary: 'Matched by project name or path' });
+      if (score > 0.2) scored.push({ type: 'project', id: p.encodedName, confidence: score, summary: 'Matched by project name, path, or session title' });
     }
 
     scored.sort((a, b) => b.confidence - a.confidence);
@@ -7243,6 +7240,30 @@ function getSearchableFiles() {
  * @param {string} sessionId - Fallback UUID
  * @returns {string} A human-readable session name
  */
+function extractCustomTitle(jsonlPath) {
+  try {
+    const fd = fs.openSync(jsonlPath, 'r');
+    try {
+      const size = fs.fstatSync(fd).size;
+      const tailSize = Math.min(131072, size);
+      const buf = Buffer.alloc(tailSize);
+      fs.readSync(fd, buf, 0, tailSize, size - tailSize);
+      const lines = buf.toString('utf8').split('\n');
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (lines[i].includes('"custom-title"')) {
+          try {
+            const obj = JSON.parse(lines[i]);
+            if (obj.customTitle) return obj.customTitle;
+          } catch (_) {}
+        }
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (_) {}
+  return null;
+}
+
 function extractSessionName(filePath, sessionId) {
   try {
     // Read just the first 10KB to find the first meaningful message
@@ -8054,4 +8075,5 @@ module.exports = {
   startServer,
   getPtyManager,
   structuredError,
+  extractCustomTitle,
 };

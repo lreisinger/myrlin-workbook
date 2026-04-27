@@ -3109,10 +3109,16 @@ class CWMApp {
           this.showToast('Select or create a project first', 'warning');
           return;
         }
-        // Use project folder name as friendly default name instead of raw UUID
-        const projectName = projectPath ? projectPath.split('\\').pop() || projectPath.split('/').pop() || sessionName : sessionName;
-        const shortId = sessionName.length > 8 ? sessionName.substring(0, 8) : sessionName;
-        const friendlyName = projectName + ' (' + shortId + ')';
+        // Prefer custom title from Claude session, fall back to folder name + short UUID
+        const customTitle = this.getProjectSessionTitle(sessionName);
+        let friendlyName;
+        if (customTitle) {
+          friendlyName = customTitle;
+        } else {
+          const projectName = projectPath ? projectPath.split('\\').pop() || projectPath.split('/').pop() || sessionName : sessionName;
+          const shortId = sessionName.length > 8 ? sessionName.substring(0, 8) : sessionName;
+          friendlyName = projectName + ' (' + shortId + ')';
+        }
         this.api('POST', '/api/sessions', {
           name: friendlyName,
           workspaceId: this.state.activeWorkspace.id,
@@ -7230,8 +7236,10 @@ class CWMApp {
           !p.dirExists ? '<span class="discover-badge discover-badge-missing">missing</span>' : '',
         ].filter(Boolean).join(' ');
 
-        const latestSessionId = p.sessions && p.sessions.length > 0 ? p.sessions[0].name : '';
-        return `<div class="discover-row" data-path="${this.escapeHtml(p.realPath)}" data-name="${this.escapeHtml(name)}" data-session-id="${this.escapeHtml(latestSessionId)}">
+        const latestSession = p.sessions && p.sessions.length > 0 ? p.sessions[0] : null;
+        const latestSessionId = latestSession ? latestSession.name : '';
+        const latestSessionTitle = latestSession ? (latestSession.title || '') : '';
+        return `<div class="discover-row" data-path="${this.escapeHtml(p.realPath)}" data-name="${this.escapeHtml(name)}" data-session-id="${this.escapeHtml(latestSessionId)}" data-session-title="${this.escapeHtml(latestSessionTitle)}">
           <div class="discover-check">
             <input type="checkbox" class="discover-cb" ${p.dirExists ? 'checked' : ''} ${!p.dirExists ? 'disabled' : ''}>
           </div>
@@ -7293,7 +7301,7 @@ class CWMApp {
         const cb = row.querySelector('.discover-cb');
         if (cb && cb.checked) {
           selected.push({
-            name: row.dataset.name,
+            name: row.dataset.sessionTitle || row.dataset.name,
             path: row.dataset.path,
             sessionId: row.dataset.sessionId || '',
           });
@@ -9546,9 +9554,9 @@ class CWMApp {
         const path = p.realPath || '';
         // Match against project name, encoded name, or path
         if (name.toLowerCase().includes(query) || encoded.toLowerCase().includes(query) || path.toLowerCase().includes(query)) return true;
-        // Match against any session ID/name within this project
+        // Match against any session ID, title, or Claude custom-title within this project
         const allSessions = p.sessions || [];
-        return allSessions.some(s => (s.name || '').toLowerCase().includes(query));
+        return allSessions.some(s => (s.name || '').toLowerCase().includes(query) || (s.title || '').toLowerCase().includes(query));
       });
     }
 
@@ -9579,8 +9587,9 @@ class CWMApp {
         if (!projectMatches) {
           sessions = sessions.filter(s => {
             const sName = (s.name || '').toLowerCase();
+            const sClaudeTitle = (s.title || '').toLowerCase();
             const sTitle = (this.getProjectSessionTitle(s.name) || '').toLowerCase();
-            return sName.includes(query) || sTitle.includes(query);
+            return sName.includes(query) || sClaudeTitle.includes(query) || sTitle.includes(query);
           });
         }
       }
@@ -9588,13 +9597,19 @@ class CWMApp {
       // Build session sub-items
       const sessionItems = sessions.map(s => {
         const sessName = s.name || 'unnamed';
+        const claudeTitle = s.title || null;
+        if (claudeTitle && !this.getProjectSessionTitle(sessName)) {
+          const titles = JSON.parse(localStorage.getItem('cwm_projectSessionTitles') || '{}');
+          titles[sessName] = claudeTitle;
+          localStorage.setItem('cwm_projectSessionTitles', JSON.stringify(titles));
+        }
         const storedTitle = this.getProjectSessionTitle(sessName);
-        const displayName = storedTitle || (sessName.length > 24 ? sessName.substring(0, 24) + '...' : sessName);
+        const displayName = storedTitle || claudeTitle || (sessName.length > 24 ? sessName.substring(0, 24) + '...' : sessName);
         const sessSize = s.size ? this.formatSize(s.size) : '';
         const sessTime = s.modified ? this.relativeTime(s.modified) : '';
-        // Tooltip: show title + session ID so user sees both on hover
-        const tooltip = storedTitle
-          ? `${storedTitle}\n\nSession: ${sessName}`
+        const effectiveTitle = storedTitle || claudeTitle;
+        const tooltip = effectiveTitle
+          ? `${effectiveTitle}\n\nSession: ${sessName}`
           : sessName;
         return `<div class="project-session-item" draggable="true" data-session-name="${this.escapeHtml(sessName)}" data-project-path="${this.escapeHtml(p.realPath || '')}" data-project-encoded="${this.escapeHtml(encoded)}" title="${this.escapeHtml(tooltip)}">
           <span class="project-session-name">${this.escapeHtml(displayName)}</span>
