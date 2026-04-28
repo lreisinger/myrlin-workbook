@@ -11,10 +11,52 @@
  *   - Scrollback is capped at ~100KB total characters
  */
 
-const pty = require('node-pty');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+
+// Ensure node-pty's prebuilt spawn-helper is executable BEFORE requiring node-pty.
+// node-pty's prebuild ships with mode 644 instead of 755, causing posix_spawnp
+// to fail on macOS/Linux. The postinstall script handles this in normal installs
+// but doesn't run with --ignore-scripts or in some npx caches. This runtime
+// fallback covers those cases. See: https://github.com/therealarthur/myrlin-workbook/issues/4
+if (process.platform !== 'win32') {
+  try {
+    const ptyMain = require.resolve('node-pty');
+    let dir = path.dirname(ptyMain);
+    for (let i = 0; i < 8; i++) {
+      const pkg = path.join(dir, 'package.json');
+      if (fs.existsSync(pkg)) {
+        try {
+          const json = JSON.parse(fs.readFileSync(pkg, 'utf8'));
+          if (json && json.name === 'node-pty') break;
+        } catch (_) {}
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) { dir = null; break; }
+      dir = parent;
+    }
+    if (dir) {
+      const prebuildsDir = path.join(dir, 'prebuilds');
+      if (fs.existsSync(prebuildsDir)) {
+        for (const p of fs.readdirSync(prebuildsDir)) {
+          const helper = path.join(prebuildsDir, p, 'spawn-helper');
+          if (fs.existsSync(helper)) {
+            try {
+              const stat = fs.statSync(helper);
+              // Only chmod if not already executable, avoids unnecessary syscalls
+              if ((stat.mode & 0o111) === 0) fs.chmodSync(helper, 0o755);
+            } catch (_) {}
+          }
+        }
+      }
+    }
+  } catch (_) {
+    // node-pty not yet resolvable; require() below will throw with a clearer error
+  }
+}
+
+const pty = require('node-pty');
 const { getStore } = require('../state/store');
 
 /**

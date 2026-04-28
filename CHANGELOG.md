@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.30] - 2026-04-27
+
+### Fixed
+
+- **posix_spawnp failed on macOS/Linux (reopened #4)** - The Feb fix for node-pty's spawn-helper permissions only worked when node-pty lived at `<package>/node_modules/node-pty/`. With npm hoisting and npx caches it often lives elsewhere, so the chmod was silently skipped. Postinstall now uses `require.resolve('node-pty')` to locate the actual package directory regardless of layout. Added a runtime fallback in `pty-manager.js` that re-checks and chmod's before requiring node-pty, covering `--ignore-scripts` installs and unusual cache layouts.
+
 ## [0.9.29] - 2026-04-27
 
 ### Added
