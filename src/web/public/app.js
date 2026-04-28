@@ -142,6 +142,7 @@ class CWMApp {
     // ─── Terminal panes ──────────────────────────────────────────
     this.terminalPanes = new Array(CWMApp.MAX_PANES).fill(null);
     this._activeTerminalSlot = null;
+    this._paneRefreshTimers = {};
     // Cache of TerminalPane instances per group to avoid reconnection on tab switch.
     // Key: groupId, Value: { panes: [TerminalPane|null x MAX_PANES], domFragments: [DocumentFragment|null x MAX_PANES] }
     this._groupPaneCache = {};
@@ -5017,8 +5018,8 @@ class CWMApp {
    * Builds a two-pane layout: file tree sidebar on left, editor pane on right.
    * Skips re-initialization if already rendered for the same workspace.
    */
-  async renderTasksFilesPanel() {
-    const panel = document.getElementById('tasks-files-panel');
+  async renderTasksFilesPanel(container = null) {
+    const panel = container || document.getElementById('tasks-files-panel');
     if (!panel) return;
 
     const ws = this.state.activeWorkspace;
@@ -5353,8 +5354,8 @@ class CWMApp {
    * and commit log; right pane shows diff for the selected file.
    * Includes 10-second auto-refresh when the tab is active.
    */
-  async renderTasksGitPanel() {
-    const panel = document.getElementById('tasks-git-panel');
+  async renderTasksGitPanel(container = null) {
+    const panel = container || document.getElementById('tasks-git-panel');
     if (!panel) return;
 
     const ws = this.state.activeWorkspace;
@@ -5706,7 +5707,7 @@ class CWMApp {
   }
 
   /** Fetch tasks and render in the active layout */
-  async renderTasksView() {
+  async renderTasksView(container = null) {
     // Initialize layout from localStorage (default: board)
     if (!this._tasksLayout) {
       this._tasksLayout = localStorage.getItem('cwm_tasksLayout') || 'board';
@@ -10150,7 +10151,7 @@ class CWMApp {
         // Right-click context menu on terminal pane
         pane.addEventListener('contextmenu', (e) => {
           const tp = this.terminalPanes[slotIdx];
-          if (!tp) return; // empty pane - let default menu show
+          if (!tp) { e.preventDefault(); e.stopPropagation(); this._showEmptyPaneContextMenu(slotIdx, e.clientX, e.clientY); return; }
           e.preventDefault();
           e.stopPropagation();
           this.showTerminalContextMenu(slotIdx, e.clientX, e.clientY);
@@ -10306,6 +10307,128 @@ class CWMApp {
   }
 
   /**
+   * Replace the terminal in a pane with a structured view (tasks, doc, etc.).
+   * The terminal is hidden but not disposed; restoreTerminalInPane() brings it back.
+   * @param {number} slotIdx - The pane slot index
+   * @param {string} viewType - One of: 'tasks-git', 'tasks-td', 'tasks-worktree', 'tasks-files', 'doc'
+   * @param {Object} [viewData={}] - Optional view-specific data (e.g. { docId } for doc views)
+   */
+  async openViewInPane(slotIdx, viewType, viewData = {}) {
+    const paneEl = document.getElementById(`term-pane-${slotIdx}`);
+    if (!paneEl) return;
+    const termContainer = document.getElementById(`term-container-${slotIdx}`);
+    const viewContainer = document.getElementById(`pane-view-${slotIdx}`);
+    if (!termContainer || !viewContainer) return;
+
+    termContainer.hidden = true;
+    viewContainer.hidden = false;
+    viewContainer.replaceChildren();
+
+    const labels = {
+      'tasks-git': 'Git',
+      'tasks-td': 'Tasks',
+      'tasks-worktree': 'Worktree',
+      'tasks-files': 'Files',
+      'doc': 'Doc'
+    };
+    const badge = paneEl.querySelector('.pane-view-badge');
+    const backBtn = paneEl.querySelector('.pane-view-back');
+    if (badge) { badge.textContent = labels[viewType] || viewType; badge.hidden = false; }
+    if (backBtn) backBtn.hidden = false;
+
+    paneEl.dataset.viewType = viewType;
+    paneEl.dataset.viewData = JSON.stringify(viewData);
+
+    await this._renderPaneView(slotIdx, viewType, viewData, viewContainer);
+    this.saveTerminalLayout();
+  }
+
+  /**
+   * Restore a pane from a structured view back to its terminal.
+   * Clears the view container, stops any refresh timers, and refits the terminal.
+   * @param {number} slotIdx - The pane slot index
+   */
+  restoreTerminalInPane(slotIdx) {
+    const paneEl = document.getElementById(`term-pane-${slotIdx}`);
+    if (!paneEl) return;
+    const termContainer = document.getElementById(`term-container-${slotIdx}`);
+    const viewContainer = document.getElementById(`pane-view-${slotIdx}`);
+
+    if (viewContainer) { viewContainer.hidden = true; viewContainer.replaceChildren(); }
+    if (termContainer) termContainer.hidden = false;
+
+    const badge = paneEl.querySelector('.pane-view-badge');
+    const backBtn = paneEl.querySelector('.pane-view-back');
+    if (badge) badge.hidden = true;
+    if (backBtn) backBtn.hidden = true;
+
+    delete paneEl.dataset.viewType;
+    delete paneEl.dataset.viewData;
+
+    if (this._paneRefreshTimers[slotIdx]) {
+      clearInterval(this._paneRefreshTimers[slotIdx]);
+      delete this._paneRefreshTimers[slotIdx];
+    }
+
+    const tp = this.terminalPanes[slotIdx];
+    if (tp && tp.safeFit) tp.safeFit();
+    this.saveTerminalLayout();
+  }
+
+  /**
+   * Render the appropriate view into the pane view container.
+   * Clears any existing refresh timer for this slot before rendering.
+   * Git panels auto-refresh every 10 seconds.
+   * @param {number} slotIdx - The pane slot index (used for refresh timer key)
+   * @param {string} viewType - The view type identifier
+   * @param {Object} viewData - View-specific data
+   * @param {HTMLElement} container - The container element to render into
+   */
+  async _renderPaneView(slotIdx, viewType, viewData, container) {
+    if (this._paneRefreshTimers[slotIdx]) {
+      clearInterval(this._paneRefreshTimers[slotIdx]);
+      delete this._paneRefreshTimers[slotIdx];
+    }
+    switch (viewType) {
+      case 'tasks-git':
+        await this.renderTasksGitPanel(container);
+        this._paneRefreshTimers[slotIdx] = setInterval(() => this.renderTasksGitPanel(container), 10000);
+        break;
+      case 'tasks-td':
+        await this.renderTasksTdPanel(container);
+        break;
+      case 'tasks-worktree':
+        await this.renderTasksView(container);
+        break;
+      case 'tasks-files':
+        await this.renderTasksFilesPanel(container);
+        break;
+      case 'doc':
+        await this._renderDocInPane(container, viewData);
+        break;
+    }
+  }
+
+  /**
+   * Render a workspace docs textarea into the given pane container.
+   * Saves content on blur via the workspace docs API.
+   * @param {HTMLElement} container - The container element to render into
+   * @param {Object} viewData - Optional view data (currently unused for doc type)
+   */
+  async _renderDocInPane(container, viewData) {
+    const ws = this.state.activeWorkspace;
+    if (!ws) return;
+    const docs = await this.api('GET', `/api/workspaces/${ws.id}/docs`);
+    const textarea = document.createElement('textarea');
+    textarea.style.cssText = 'width:100%;height:100%;resize:none;background:var(--base);color:var(--text);border:none;padding:12px;font-family:var(--mono);flex:1;min-height:0;';
+    textarea.value = docs.raw || '';
+    textarea.addEventListener('blur', async () => {
+      await this.api('POST', `/api/workspaces/${ws.id}/docs`, { content: textarea.value });
+    });
+    container.appendChild(textarea);
+  }
+
+  /**
    * Update the activity indicator on a terminal pane header.
    * Called when 'terminal-activity' events fire from TerminalPane.
    */
@@ -10366,6 +10489,22 @@ class CWMApp {
       fields: [{ key: 'body', type: 'textarea', value: body }],
       confirmText: 'Close',
     });
+  }
+
+  /**
+   * Context menu shown when right-clicking an empty (no terminal) pane slot.
+   * Offers quick access to all pane view types.
+   */
+  _showEmptyPaneContextMenu(slotIdx, x, y) {
+    const items = [
+      { label: 'Worktree Tasks', action: () => this.openViewInPane(slotIdx, 'tasks-worktree') },
+      { label: 'td Issues', action: () => this.openViewInPane(slotIdx, 'tasks-td') },
+      { label: 'Git Status', action: () => this.openViewInPane(slotIdx, 'tasks-git') },
+      { label: 'Files', action: () => this.openViewInPane(slotIdx, 'tasks-files') },
+      { type: 'sep' },
+      { label: 'Workspace Doc', action: () => this.openViewInPane(slotIdx, 'doc') },
+    ];
+    this._renderContextItems('Open View', items, x, y);
   }
 
   showTerminalContextMenu(slotIdx, x, y) {
@@ -10550,10 +10689,28 @@ class CWMApp {
       },
     });
 
+    // ── Switch to view ────────────────────────────────────────
+    items.push({ type: 'sep' });
+    items.push({
+      label: 'Switch to view',
+      submenu: [
+        { label: 'Worktree Tasks', action: () => this.openViewInPane(slotIdx, 'tasks-worktree') },
+        { label: 'td Issues', action: () => this.openViewInPane(slotIdx, 'tasks-td') },
+        { label: 'Git Status', action: () => this.openViewInPane(slotIdx, 'tasks-git') },
+        { label: 'Files', action: () => this.openViewInPane(slotIdx, 'tasks-files') },
+        { label: 'Workspace Doc', action: () => this.openViewInPane(slotIdx, 'doc') },
+      ],
+    });
+
     this._renderContextItems(tp.sessionName || 'Terminal', items, x, y);
   }
 
   closeTerminalPane(slotIdx) {
+    if (this._paneRefreshTimers[slotIdx]) {
+      clearInterval(this._paneRefreshTimers[slotIdx]);
+      delete this._paneRefreshTimers[slotIdx];
+    }
+
     const tp = this.terminalPanes[slotIdx];
     const sessionName = tp ? tp.sessionName : '';
 
@@ -12934,6 +13091,9 @@ class CWMApp {
       group.panes.forEach(p => {
         if (p.sessionId && !this.terminalPanes[p.slot]) {
           this.openTerminalInPane(p.slot, p.sessionId, p.sessionName || 'Terminal', p.spawnOpts || {});
+          if (p.viewType) {
+            setTimeout(() => this.openViewInPane(p.slot, p.viewType, p.viewData || {}), 100);
+          }
         }
       });
     }
@@ -13396,11 +13556,16 @@ class CWMApp {
       const tp = this.terminalPanes[i];
       // Save live TerminalPanes for layout restore.
       if (tp && tp.sessionId) {
+        const paneEl = document.getElementById('term-pane-' + i);
+        const viewType = paneEl?.dataset?.viewType || null;
+        const viewData = viewType ? JSON.parse(paneEl?.dataset?.viewData || '{}') : {};
         group.panes.push({
           slot: i,
           sessionId: tp.sessionId,
           sessionName: tp.sessionName,
           spawnOpts: tp.spawnOpts || {},
+          viewType,
+          viewData,
         });
       }
     }
