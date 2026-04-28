@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.31] - 2026-04-28
+
+### Added
+
+- **Pane view system** - Any terminal pane slot can now show a structured view (Worktree Tasks, td Issues, Git Status, Files, or Workspace Doc) instead of or alongside a terminal session. Right-click an empty pane for "Open View" submenu, or right-click an active terminal for "Switch to view" submenu. Terminal sessions keep running hidden when a view is shown and restore instantly via the back button. viewType and viewData persist in layout.json across restarts. Git Status auto-refreshes every 10 seconds. (PR #49 by @croakingtoad)
+
 ## [0.9.30] - 2026-04-27
 
 ### Fixed
