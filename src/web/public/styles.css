@@ -5142,6 +5142,9 @@ textarea.input {
 /* Terminal pane drag-to-reposition */
 .terminal-pane-header {
   cursor: grab;
+  /* Touch: let DragDropTouch polyfill do long-press-to-drag without the
+     browser claiming the gesture for scroll/zoom on the underlying terminal. */
+  touch-action: none;
 }
 .terminal-pane-empty .terminal-pane-header {
   cursor: default;
@@ -5447,6 +5450,10 @@ html.activity-indicators-disabled .terminal-pane-activity {
   white-space: nowrap;
   transition: all var(--transition-fast);
   position: relative;
+  /* Touch: let DragDropTouch polyfill handle long-press-to-drag without the
+     browser claiming the gesture for the scrollable tab strip. 
+  */
+  touch-action: none;
 }
 
 .terminal-group-tab:hover {

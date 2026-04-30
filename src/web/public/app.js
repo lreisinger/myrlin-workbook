@@ -11426,9 +11426,13 @@ class CWMApp {
     grid.addEventListener('touchmove', (e) => {
       // Only intercept when terminal is the active view on mobile
       if (!document.body.classList.contains('terminal-active')) return;
-      // Allow the touch event for xterm's internal scroll handling,
-      // but stop it from propagating to the page/body scroll.
+      // Original intent: stop xterm's internal scroll from leaking to the page.
+      // Scope this to the xterm viewport only — otherwise we eat touchmoves on
+      // pane headers / resize handles and break things like the
+      // DragDropTouch polyfill (which listens on document in bubble phase).
+      if (e.target && e.target.closest && e.target.closest('.xterm-viewport, .xterm-screen')) {
       e.stopPropagation();
+      }
     }, { passive: true });
   }
 
