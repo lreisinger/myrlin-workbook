@@ -240,6 +240,7 @@ class CWMApp {
       logoutBtn: document.getElementById('logout-btn'),
       themeToggleBtn: document.getElementById('theme-toggle-btn'),
       themeDropdown: document.getElementById('theme-dropdown'),
+      vkbToggleBtn: document.getElementById('vkb-toggle-btn'),
       scaleDownBtn: document.getElementById('scale-down-btn'),
       scaleUpBtn: document.getElementById('scale-up-btn'),
 
@@ -557,6 +558,34 @@ class CWMApp {
       document.addEventListener('click', () => {
         if (this.els.themeDropdown) this.els.themeDropdown.hidden = true;
       });
+    }
+
+    // Virtual keyboard toggle. inputmode="none" is a no-op on devices without
+    // a soft keyboard, so we apply it unconditionally instead of trying to
+    // detect "is mobile" (which is unreliable across browsers).
+    this._vkbDisabled = localStorage.getItem('cwm_vkb_disabled') === '1';
+    this._applyVkbState();
+    if (this.els.vkbToggleBtn) {
+      this.els.vkbToggleBtn.addEventListener('click', () => {
+        this._vkbDisabled = !this._vkbDisabled;
+        localStorage.setItem('cwm_vkb_disabled', this._vkbDisabled ? '1' : '0');
+        this._applyVkbState();
+      });
+      // Watch for newly-created xterm helper textareas and apply state to them.
+      const obs = new MutationObserver((muts) => {
+        if (!this._vkbDisabled) return;
+        for (const m of muts) {
+          for (const n of m.addedNodes) {
+            if (n.nodeType !== 1) continue;
+            if (n.matches && n.matches('.xterm-helper-textarea')) {
+              n.setAttribute('inputmode', 'none');
+            } else if (n.querySelectorAll) {
+              n.querySelectorAll('.xterm-helper-textarea').forEach(t => t.setAttribute('inputmode', 'none'));
+            }
+          }
+        }
+      });
+      obs.observe(document.body, { childList: true, subtree: true });
     }
 
     // Sidebar toggle (mobile)
@@ -3530,6 +3559,22 @@ class CWMApp {
       if (tp && tp.term) {
         tp.term.options.theme = TerminalPane.getCurrentTheme();
       }
+    });
+  }
+
+  _applyVkbState() {
+    const btn = this.els && this.els.vkbToggleBtn;
+    const active = !!this._vkbDisabled;
+    if (btn) {
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+      btn.title = active
+        ? 'On-screen keyboard disabled (click to enable)'
+        : 'Disable on-screen keyboard (hardware keyboard only)';
+    }
+    document.querySelectorAll('.xterm-helper-textarea').forEach(t => {
+      if (active) t.setAttribute('inputmode', 'none');
+      else t.removeAttribute('inputmode');
     });
   }
 
