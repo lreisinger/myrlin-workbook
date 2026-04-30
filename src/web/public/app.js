@@ -10165,7 +10165,7 @@ class CWMApp {
             if (!tp) return;
             const touch = e.touches[0];
             this.showTerminalContextMenu(slotIdx, touch.clientX, touch.clientY);
-          }, 600);
+          }, 1000);
         }, { passive: true });
         pane.addEventListener('touchend', () => clearTimeout(termLongPress));
         pane.addEventListener('touchmove', () => clearTimeout(termLongPress));
