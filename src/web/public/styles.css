@@ -3228,6 +3228,12 @@ textarea.input {
   display: none;
 }
 
+/* During a drag, let elementFromPoint fall through to drop targets behind
+   the backdrop (otherwise the touch polyfill can't hit terminal panes). */
+body.cwm-dragging .sidebar-backdrop {
+  pointer-events: none;
+}
+
 
 /* ─── Workspace color picker in modal ───────────────────────── */
 

@@ -720,10 +720,9 @@ class TerminalPane {
    * Type mode: textarea is writable, keyboard appears for input
    */
   _isMobile() {
-    // Use width-based check matching the CSS media query, NOT touch detection.
-    // Touch-enabled desktops (Windows laptops) have 'ontouchstart' but should
-    // NOT get mobile treatment - they have keyboards and wide screens.
-    return window.innerWidth <= 768;
+    // Enable touch scroll/type modes for any device with touch capability, 
+    // including tablets (not just narrow screens).
+    return ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
   }
 
   /**
@@ -874,6 +873,9 @@ class TerminalPane {
       }
 
       if (isScrolling) {
+        // Prevent default browser scroll (e.g. pull-to-refresh on Chrome mobile/tablet)
+        if (e.cancelable) e.preventDefault();
+        
         // Scroll via xterm.js API so ydisp stays in sync (prevents snap-back on output)
         scrollByPixels(deltaY);
         // Track velocity for momentum (smoothed exponential average)
@@ -908,11 +910,12 @@ class TerminalPane {
     };
 
     // Use CAPTURE phase to intercept before xterm.js gets the events.
-    // Non-passive so we can prevent xterm from seeing the events in scroll mode.
-    container.addEventListener('touchstart', onTouchStart, { capture: true, passive: true });
-    container.addEventListener('touchmove', onTouchMove, { capture: true, passive: true });
-    container.addEventListener('touchend', onTouchEnd, { capture: true, passive: true });
-    container.addEventListener('touchcancel', onTouchEnd, { capture: true, passive: true });
+    // Non-passive so we can prevent xterm from seeing the events in scroll mode
+    // AND prevent browser pull-to-refresh (overscroll) on mobile/tablet.
+    container.addEventListener('touchstart', onTouchStart, { capture: true, passive: false });
+    container.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
+    container.addEventListener('touchend', onTouchEnd, { capture: true, passive: false });
+    container.addEventListener('touchcancel', onTouchEnd, { capture: true, passive: false });
 
     // Store cleanup function for dispose()
     this._touchScrollCleanup = () => {

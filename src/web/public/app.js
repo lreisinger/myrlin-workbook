@@ -559,6 +559,15 @@ class CWMApp {
       });
     }
 
+    // While any HTML5 drag is active, mark <body> so the mobile sidebar
+    // backdrop becomes pointer-events: none. Without this, on mobile the
+    // backdrop occludes terminal panes for elementFromPoint, so the
+    // DragDropTouch polyfill never fires dragover/drop on the pane behind it.
+    document.addEventListener('dragstart', () => document.body.classList.add('cwm-dragging'), true);
+    const clearDragging = () => document.body.classList.remove('cwm-dragging');
+    document.addEventListener('dragend', clearDragging, true);
+    document.addEventListener('drop', clearDragging, true);
+
     // Sidebar toggle (mobile)
     this.els.sidebarToggle.addEventListener('click', () => this.toggleSidebar());
 
@@ -9946,9 +9955,11 @@ class CWMApp {
           pane.classList.remove('drag-over');
           console.log('[DnD] Drop on pane', slotIdx, 'types:', Array.from(e.dataTransfer.types));
 
-          // Terminal pane swap/reposition - drag a pane header onto another pane
+          // Terminal pane swap/reposition - drag a pane header onto another pane.
+          // Use truthy check: native DataTransfer.getData returns '' for missing
+          // keys, but the touch polyfill returns undefined — both must skip.
           const swapSource = e.dataTransfer.getData('cwm/terminal-swap');
-          if (swapSource !== '') {
+          if (swapSource) {
             const srcSlot = parseInt(swapSource, 10);
             if (srcSlot !== slotIdx) {
               this.swapTerminalPanes(srcSlot, slotIdx);
@@ -11426,13 +11437,12 @@ class CWMApp {
     grid.addEventListener('touchmove', (e) => {
       // Only intercept when terminal is the active view on mobile
       if (!document.body.classList.contains('terminal-active')) return;
-      // Original intent: stop xterm's internal scroll from leaking to the page.
       // Scope this to the xterm viewport only — otherwise we eat touchmoves on
       // pane headers / resize handles and break things like the
       // DragDropTouch polyfill (which listens on document in bubble phase).
-      if (e.target && e.target.closest && e.target.closest('.xterm-viewport, .xterm-screen')) {
-      e.stopPropagation();
-      }
+      // We don't stop propagation here anymore to allow index.html's hack 
+      // preventing the polyfill from breaking xterm's native scroll on desktop touch.
+      // (The polyfill needs to be suppressed, index.html does it on document level).
     }, { passive: true });
   }
 
@@ -11441,7 +11451,8 @@ class CWMApp {
    * Only active on mobile. Scoped to terminal-grid to avoid sidebar conflicts.
    */
   initTerminalPaneSwipe() {
-    if (window.innerWidth > 768) return;
+    // Enable touch pane swipe on any touch-capable device, not just phones.
+    if (!('ontouchstart' in window) && navigator.maxTouchPoints === 0) return;
 
     const grid = this.els.terminalGrid;
     if (!grid) return;
@@ -13267,7 +13278,7 @@ class CWMApp {
         e.preventDefault();
         hdr.classList.remove('tab-drag-over');
         const swapSource = e.dataTransfer.getData('cwm/terminal-swap');
-        if (swapSource !== '') {
+        if (swapSource) {
           const srcSlot = parseInt(swapSource, 10);
           const folderTabs = this._tabGroups.filter(g => g.folderId === folderId);
           if (folderTabs.length > 0 && folderTabs[0].id !== this._activeGroupId) {
@@ -13357,7 +13368,7 @@ class CWMApp {
 
         // Handle terminal pane drop - move terminal to this tab group
         const swapSource = e.dataTransfer.getData('cwm/terminal-swap');
-        if (swapSource !== '') {
+        if (swapSource) {
           const srcSlot = parseInt(swapSource, 10);
           const targetGroupId = tab.dataset.groupId;
           if (targetGroupId !== this._activeGroupId) {

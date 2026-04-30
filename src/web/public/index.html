@@ -1682,6 +1682,25 @@
 
   <script src="vendor/lucide.bundle.js"></script>
   <script src="vendor/material-icons.bundle.js"></script>
+  <!-- Block the DragDropTouch polyfill from observing touch events that
+       happen inside the xterm.js viewport. The polyfill always dispatches a
+       synthetic mousemove on every touchmove; xterm preventDefault's mousemove,
+       which makes the polyfill cancel the touchmove and kill native scrolling.
+       This script registers its document-bubble listeners *before* the polyfill
+       loads, so stopImmediatePropagation here suppresses the polyfill's
+       same-phase listener for the xterm case only. -->
+  <script>
+    (function () {
+      var inXterm = function (el) {
+        return el && el.closest && el.closest('.xterm-viewport, .xterm-screen');
+      };
+      var stop = function (e) { if (inXterm(e.target)) e.stopImmediatePropagation(); };
+      document.addEventListener('touchstart', stop, { passive: true });
+      document.addEventListener('touchmove', stop, { passive: true });
+      document.addEventListener('touchend', stop, { passive: true });
+      document.addEventListener('touchcancel', stop, { passive: true });
+    })();
+  </script>
   <!-- Polyfills HTML5 drag-and-drop on touch devices (translates touch -> drag events) -->
   <script type="module" src="vendor/drag-drop-touch.esm.min.js?autoload"></script>
   <script src="vendor/qrcode.min.js"></script>
