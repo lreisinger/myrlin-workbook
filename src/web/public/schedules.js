@@ -87,11 +87,18 @@
     _reposition() {
       if (!this.el || !this.anchor) return;
       const r = this.anchor.getBoundingClientRect();
-      const margin = 4;
+      const margin = 8;
       const popW = this.el.offsetWidth || 360;
-      let left = r.left;
-      let top = r.bottom + margin;
-      // Clamp inside viewport
+      const popH = this.el.offsetHeight || 320;
+      // The schedule button floats at the bottom-right of the pane, so the
+      // popover opens above-and-left of it (right edge aligned to button's
+      // right edge, bottom edge above the button with a margin).
+      let left = r.right - popW;
+      let top = r.top - popH - margin;
+      // If there isn't enough room above, fall back to opening below.
+      if (top < 8) top = r.bottom + margin;
+      // Clamp inside viewport horizontally.
+      if (left < 8) left = 8;
       const maxLeft = window.innerWidth - popW - 8;
       if (left > maxLeft) left = Math.max(8, maxLeft);
       this.el.style.left = `${left}px`;
@@ -108,6 +115,9 @@
         body.innerHTML = `<div class="schedule-list" data-history></div>`;
         this._refreshHistory();
       }
+      // Reposition after content drops in — the popover height changes,
+      // and we anchor the bottom above the button.
+      this._reposition();
     },
 
     _renderActive() {
@@ -206,6 +216,7 @@
       const res = await SchedulePopover._fetch('GET', '');
       if (!res.ok) {
         listEl.innerHTML = `<div class="schedule-empty">Failed to load (${res.status})</div>`;
+        this._reposition();
         return;
       }
       const active = (res.json && res.json.active) || [];
@@ -213,6 +224,7 @@
       this._renderList(listEl, active);
       this._refreshBadge(active.length);
       this._restartTicker();
+      this._reposition();
     },
 
     _renderList(listEl, active) {
@@ -286,15 +298,17 @@
       const res = await SchedulePopover._fetch('GET', '');
       if (!res.ok) {
         histEl.innerHTML = `<div class="schedule-empty">Failed to load (${res.status})</div>`;
+        this._reposition();
         return;
       }
       const rows = (res.json && res.json.history) || [];
       if (rows.length === 0) {
         histEl.innerHTML = `<div class="schedule-empty">No history yet</div>`;
+        this._reposition();
         return;
       }
       const now = Date.now();
-      histEl.innerHTML = rows.map(r => {
+      const html = rows.map(r => {
         const ago = SchedulePopover._fmtAgo(now - r.firedAt);
         if (r.status === 'success') {
           return `<div class="schedule-row">
@@ -314,6 +328,8 @@
           <span class="when">· ${ago}</span>
         </div>`;
       }).join('');
+      histEl.innerHTML = html;
+      this._reposition();
     },
 
     _fmtAgo(ms) {
