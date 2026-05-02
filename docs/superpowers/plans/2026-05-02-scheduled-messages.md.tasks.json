@@ -1,0 +1,61 @@
+{
+  "planPath": "docs/superpowers/plans/2026-05-02-scheduled-messages.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 1: Scheduler — module surface, persistence, create/list/delete",
+      "status": "pending",
+      "description": "**Goal:** A `Scheduler` class that loads/saves `~/.myrlin/schedules.json` and supports `create/listActive/listHistory/delete`. No firing yet.\n\n**Files:**\n- Create: `src/web/scheduler.js`\n- Create: `test/scheduler.test.js`\n\n**Verify:** `node test/scheduler.test.js` → `Results: 8 passed, 0 failed`\n\n```json:metadata\n{\"files\": [\"src/web/scheduler.js\", \"test/scheduler.test.js\"], \"verifyCommand\": \"node test/scheduler.test.js\", \"acceptanceCriteria\": [\"Constructor takes injectable dependencies\", \"create() validates and persists\", \"listActive sorts oldest first\", \"delete removes and persists\", \"Atomic + debounced 200ms persistence\", \"Round-trip survives reload\"]}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 2: Scheduler — fire flow (success path)",
+      "status": "pending",
+      "blockedBy": [0],
+      "description": "**Goal:** start() arms timers; on fire pty.write(command + '\\r'); one-off deletes; recurring re-arms; success history row appended.\n\n**Files:**\n- Modify: `src/web/scheduler.js`\n- Modify: `test/scheduler.test.js`\n\n**Verify:** `node test/scheduler.test.js` → `Results: 13 passed, 0 failed`\n\n```json:metadata\n{\"files\": [\"src/web/scheduler.js\", \"test/scheduler.test.js\"], \"verifyCommand\": \"node test/scheduler.test.js\", \"acceptanceCriteria\": [\"start() arms timers\", \"pty.write receives command + \\\\r\", \"once deletes after fire\", \"recurring re-arms with delayMs\", \"success history row appended\", \"stop() cancels all timers\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 3: Scheduler — skip handling, history collapse, cap",
+      "status": "pending",
+      "blockedBy": [1],
+      "description": "**Goal:** Stopped pty → skipped row; consecutive same-(id,reason) skip rows collapse with skipCount; success between skips breaks collapse; history cap at 50 per session.\n\n**Files:**\n- Modify: `src/web/scheduler.js`\n- Modify: `test/scheduler.test.js`\n\n**Verify:** `node test/scheduler.test.js` → `Results: 19 passed, 0 failed`\n\n```json:metadata\n{\"files\": [\"src/web/scheduler.js\", \"test/scheduler.test.js\"], \"verifyCommand\": \"node test/scheduler.test.js\", \"acceptanceCriteria\": [\"Stopped pty produces skipped row\", \"3 consecutive same-id same-reason skips collapse to 1 row skipCount=3\", \"Success between skips breaks collapse\", \"Different schedule ids do not collapse\", \"History cap = 50 per session\"]}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 4: Scheduler — boot recovery + session-deletion cleanup",
+      "status": "pending",
+      "blockedBy": [2],
+      "description": "**Goal:** On start(): missed once → skipped+deleted; missed recurring → advance nextFireAt = now + delayMs (no catch-up). Subscribe to store 'session:deleted' and clear that session's schedules + history.\n\n**Files:**\n- Modify: `src/web/scheduler.js`\n- Modify: `test/scheduler.test.js`\n\n**Verify:** `node test/scheduler.test.js` → `Results: 23 passed, 0 failed`\n\n```json:metadata\n{\"files\": [\"src/web/scheduler.js\", \"test/scheduler.test.js\"], \"verifyCommand\": \"node test/scheduler.test.js\", \"acceptanceCriteria\": [\"missed once → skipped+deleted\", \"missed recurring → advanced + armed\", \"future schedule → armed normally\", \"session:deleted → schedules and history cleared\"]}\n```"
+    },
+    {
+      "id": 4,
+      "subject": "Task 5: HTTP routes + scheduler lifecycle in server.js",
+      "status": "pending",
+      "blockedBy": [3],
+      "description": "**Goal:** Mount 4 endpoints under /api/sessions/:id/schedules. Construct Scheduler in startServer after ptyManager wiring; start it; mount routes; stop on shutdown.\n\n**Files:**\n- Create: `src/web/scheduler-routes.js`\n- Create: `test/scheduler-api.test.js`\n- Modify: `src/web/server.js`\n\n**Verify:** `node test/scheduler-api.test.js` → `Results: 8 passed, 0 failed`\n\n```json:metadata\n{\"files\": [\"src/web/scheduler-routes.js\", \"src/web/server.js\", \"test/scheduler-api.test.js\"], \"verifyCommand\": \"node test/scheduler-api.test.js && node test/scheduler.test.js\", \"acceptanceCriteria\": [\"GET returns active+history\", \"POST validates and creates\", \"DELETE removes\", \"DELETE history clears\", \"All routes require auth\", \"startServer starts scheduler; shutdown stops it\", \"Unknown sessionId on POST → 404\"]}\n```"
+    },
+    {
+      "id": 5,
+      "subject": "Task 6: Frontend — clock button, popover scaffold, tab switch",
+      "status": "pending",
+      "blockedBy": [4],
+      "description": "**Goal:** Add clock button to all 6 pane headers; SchedulePopover class scaffold with Active/History tabs; click outside or Esc closes.\n\n**Files:**\n- Modify: `src/web/public/index.html`\n- Modify: `src/web/public/styles.css`\n- Create: `src/web/public/schedules.js`\n- Modify: `src/web/public/app.js`\n\n**Verify:** Manual — restart server, attach session, hover header, click clock, popover opens with two tabs, Esc closes, no console errors.\n\n```json:metadata\n{\"files\": [\"src/web/public/index.html\", \"src/web/public/styles.css\", \"src/web/public/schedules.js\", \"src/web/public/app.js\"], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"Clock button visible on hover of active pane\", \"Click opens positioned popover\", \"Tab switch works\", \"Esc/outside click closes\", \"Switching to other pane's clock moves popover\", \"No console errors\"]}\n```"
+    },
+    {
+      "id": 6,
+      "subject": "Task 7: Frontend — Active tab form, save, list, delete, count badge",
+      "status": "pending",
+      "blockedBy": [5],
+      "description": "**Goal:** Active tab renders form (command/when/repeat) and list with trash. Save POSTs; delete confirms+DELETEs. Count badge reflects active.length.\n\n**Files:**\n- Modify: `src/web/public/schedules.js`\n- Modify: `src/web/public/app.js` (initial badge fetch on attach)\n\n**Verify:** Manual — saved schedule fires into terminal at the right time; trash removes; badge updates.\n\n```json:metadata\n{\"files\": [\"src/web/public/schedules.js\", \"src/web/public/app.js\"], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"Form: command + when (in/at) + repeat\", \"Repeat enabled only with 'in' mode\", \"Save POSTs and refreshes list\", \"List shows once with ⏱ and recurring with ⟳\", \"Relative-time labels update each second\", \"Trash → confirm → DELETE\", \"Count badge shows active.length when > 0\", \"Cancel clears form, does not close popover\"]}\n```"
+    },
+    {
+      "id": 7,
+      "subject": "Task 8: Frontend — History tab + polling + polish + screenshot",
+      "status": "pending",
+      "blockedBy": [6],
+      "description": "**Goal:** History tab renders rows newest-first with status icons and skip-collapse rendering. Popover polls every 5s. Pane-close edge cases handled. Screenshot captured.\n\n**Files:**\n- Modify: `src/web/public/schedules.js`\n- Modify: `src/web/public/app.js`\n- Create: `screenshots/scheduled-messages.png`\n\n**Verify:** Manual — end-to-end scenarios in Task 8 step 5 all pass; screenshot exists.\n\n```json:metadata\n{\"files\": [\"src/web/public/schedules.js\", \"src/web/public/app.js\", \"screenshots/scheduled-messages.png\"], \"verifyCommand\": \"npm test && node test/scheduler.test.js && node test/scheduler-api.test.js\", \"acceptanceCriteria\": [\"History rows newest first with status icons\", \"Skip rows render with skipCount and reason\", \"5s polling refreshes visible tab\", \"Closing the host pane closes the popover\", \"Mobile keeps clock visible\", \"Screenshot saved\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-05-02"
+}
