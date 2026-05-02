@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.32] - 2026-05-02
+
+### Added
+
+- **Progressive Web App (PWA) support** - Adds manifest.webmanifest with standalone display mode and a minimal service worker so users can "install" Myrlin on desktop or mobile for a native-like, full-screen experience. Requires HTTPS (typical PWA constraint). (PR #52 by @lreisinger)
+- **Mobile virtual keyboard toggle** - New toolbar button toggles `inputmode="none"` on xterm.js helper textareas. For tablet users with hardware keyboards (iPad + Magic Keyboard, Android + Bluetooth) who don't want the on-screen keyboard popping up. Setting persisted to localStorage; no-op on devices without soft keyboards. (PR #53 by @lreisinger)
+- **Comprehensive touch support** - Three categories of mobile/tablet fixes: (1) Touch-based pane resizing via touch events on the resize handles with widened hit areas. (2) HTML5 drag-and-drop polyfill (drag-drop-touch) so dragging sessions into panes works on iOS Safari and Android Chrome. (3) Terminal scroll gestures owned by xterm.js via stopImmediatePropagation on `.xterm-viewport` and `passive: false` listeners. Mobile detection upgraded from `innerWidth <= 768` to `navigator.maxTouchPoints` so tablet users in landscape get proper touch handling. (PR #54 by @lreisinger)
+
+### Fixed
+
+- **JS syntax error breaking login** - `const container` shadowed the parameter `container` in `renderTasksFilesPanel` and `renderTasksGitPanel`, causing `Identifier 'container' has already been declared` SyntaxError on login (class bodies are strict mode by default). Now reassigns the parameter directly. (PR #51 by @lreisinger)
+
 ## [0.9.31] - 2026-04-28
 
 ### Added
