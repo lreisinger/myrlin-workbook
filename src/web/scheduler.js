@@ -133,6 +133,10 @@ class Scheduler {
     };
     this._schedules[id] = s;
     this._scheduleSave();
+    // If the engine is already running, arm a timer for this new schedule.
+    // Without this, schedules created at runtime via the HTTP API would sit
+    // idle until the next server restart's boot-recovery loop.
+    if (this._started) this._armOne(id);
     return s;
   }
 

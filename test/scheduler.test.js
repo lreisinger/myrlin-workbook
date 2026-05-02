@@ -216,6 +216,20 @@ test('recurring schedule re-arms with delayMs after fire', () => {
   assertEqual(next.length, 2);
 });
 
+test('create() after start() arms a timer immediately', () => {
+  const f = makeScheduler();
+  f.ptyManager.setSession('sess-A', true);
+  f.sched.start();
+  const s = f.sched.create('sess-A', { command: 'live', kind: 'once', delayMs: 7000 });
+  // A 7s timer must be armed (in addition to any save-debounce 200ms timers)
+  assert(f.armed.some(h => h.ms === 7000), 'expected 7s timer armed for runtime-created schedule');
+  // And firing it should reach the pty
+  f.clock.advance(7000);
+  f.armed.find(h => h.ms === 7000).fn();
+  assertEqual(f.ptyManager.writes.length, 1);
+  assertEqual(f.ptyManager.writes[0].data, 'live\r');
+});
+
 test('successful fire appends a success history row', () => {
   const f = makeScheduler();
   f.ptyManager.setSession('sess-A', true);
