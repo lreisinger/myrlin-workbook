@@ -10059,6 +10059,8 @@ html {
 .schedule-form .row > * { flex: 0 0 auto; }
 .schedule-form .row .num { width: 64px; }
 .schedule-form .row .unit { width: 80px; }
+.schedule-form .row .date { width: 140px; }
+.schedule-form .row .time { width: 100px; }
 .schedule-form .actions {
   display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px;
 }

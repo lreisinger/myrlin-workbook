@@ -143,8 +143,8 @@
           </div>
           <div class="row">
             <label><input type="radio" name="when" value="at" /> at</label>
-            <input type="date" name="fireDate" value="${todayLocal}" />
-            <input type="time" name="fireTime" />
+            <input class="date" type="date" name="fireDate" value="${todayLocal}" />
+            <input class="time" type="time" name="fireTime" />
           </div>
           <label class="row">
             <input type="checkbox" name="repeat" />
