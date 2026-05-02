@@ -9170,7 +9170,7 @@ class CWMApp {
             titleClock = document.createElement('span');
             titleClock.className = 'pane-title-clock';
             titleClock.title = 'Has scheduled messages';
-            titleClock.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.5"/><polyline points="8 4 8 8 10.5 9.5"/></svg>';
+            titleClock.innerHTML = '<svg width="12" height="12"><use href="#icon-clock"/></svg>';
             titleEl.insertAdjacentElement('afterend', titleClock);
           }
         } else if (titleClock) {
@@ -9193,7 +9193,7 @@ class CWMApp {
             icon = document.createElement('span');
             icon.className = 'session-schedule-clock';
             icon.title = `${n} scheduled message${n === 1 ? '' : 's'}`;
-            icon.innerHTML = '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.5"/><polyline points="8 4 8 8 10.5 9.5"/></svg>';
+            icon.innerHTML = '<svg width="11" height="11"><use href="#icon-clock"/></svg>';
             nameEl.appendChild(icon);
           } else {
             icon.title = `${n} scheduled message${n === 1 ? '' : 's'}`;
