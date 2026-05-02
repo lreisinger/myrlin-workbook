@@ -258,10 +258,22 @@ class Scheduler {
 
   _appendHistory(sessionId, row) {
     if (!this._history[sessionId]) this._history[sessionId] = [];
-    this._history[sessionId].push(row);
-    // Cap (Task 3 enforces collapse + cap; this naive append is replaced there).
-    if (this._history[sessionId].length > HISTORY_CAP_PER_SESSION) {
-      this._history[sessionId] = this._history[sessionId].slice(-HISTORY_CAP_PER_SESSION);
+    const arr = this._history[sessionId];
+    const last = arr[arr.length - 1];
+    const canCollapse =
+      last
+      && last.status === 'skipped'
+      && row.status === 'skipped'
+      && last.id === row.id
+      && last.skipReason === row.skipReason;
+    if (canCollapse) {
+      last.skipCount = (last.skipCount || 1) + 1;
+      last.firedAt = row.firedAt;
+    } else {
+      arr.push(row);
+    }
+    if (arr.length > HISTORY_CAP_PER_SESSION) {
+      this._history[sessionId] = arr.slice(-HISTORY_CAP_PER_SESSION);
     }
   }
 

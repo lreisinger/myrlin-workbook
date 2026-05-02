@@ -232,5 +232,100 @@ test('successful fire appends a success history row', () => {
   assertEqual(hist[0].scheduledAt, s.nextFireAt);
 });
 
+console.log('\n  Scheduler — skip handling');
+
+test('stopped pty fires skipped row, recurring re-arms', () => {
+  const f = makeScheduler();
+  f.ptyManager.setSession('sess-A', /*alive*/ false);
+  const s = f.sched.create('sess-A', { command: 'x', kind: 'recurring', delayMs: 5000 });
+  f.sched.start();
+  f.armed.find(h => h.ms === 5000).fn();
+  const hist = f.sched.listHistory('sess-A');
+  assertEqual(hist.length, 1);
+  assertEqual(hist[0].status, 'skipped');
+  assertEqual(hist[0].skipReason, 'session-not-running');
+  // Recurring re-armed
+  const active = f.sched.listActive('sess-A');
+  assertEqual(active.length, 1);
+});
+
+test('stopped pty + once kind deletes the schedule', () => {
+  const f = makeScheduler();
+  f.ptyManager.setSession('sess-A', false);
+  const s = f.sched.create('sess-A', { command: 'x', kind: 'once', delayMs: 1000 });
+  f.sched.start();
+  f.armed.find(h => h.ms === 1000).fn();
+  assertEqual(f.sched.listActive('sess-A').length, 0);
+  assertEqual(f.sched.listHistory('sess-A').length, 1);
+});
+
+test('three consecutive same-id skip rows collapse to one with skipCount=3', () => {
+  const f = makeScheduler();
+  f.ptyManager.setSession('sess-A', false);
+  const s = f.sched.create('sess-A', { command: 'x', kind: 'recurring', delayMs: 5000 });
+  f.sched.start();
+  // Fire three times in a row
+  for (let i = 0; i < 3; i++) {
+    f.clock.advance(5000);
+    const handle = f.armed.filter(h => h.ms === 5000).pop();
+    handle.fn();
+  }
+  const hist = f.sched.listHistory('sess-A');
+  assertEqual(hist.length, 1);
+  assertEqual(hist[0].skipCount, 3);
+  assertEqual(hist[0].status, 'skipped');
+});
+
+test('success between skips breaks collapse — 3 distinct rows', () => {
+  const f = makeScheduler();
+  f.ptyManager.setSession('sess-A', false);
+  const s = f.sched.create('sess-A', { command: 'x', kind: 'recurring', delayMs: 5000 });
+  f.sched.start();
+  // skip
+  f.clock.advance(5000); f.armed.filter(h => h.ms === 5000).pop().fn();
+  // bring pty up, success
+  f.ptyManager.setSession('sess-A', true);
+  f.clock.advance(5000); f.armed.filter(h => h.ms === 5000).pop().fn();
+  // pty down again, skip
+  f.ptyManager.setSession('sess-A', false);
+  f.clock.advance(5000); f.armed.filter(h => h.ms === 5000).pop().fn();
+  const hist = f.sched.listHistory('sess-A');
+  assertEqual(hist.length, 3);
+  // Newest first
+  assertEqual(hist[0].status, 'skipped');
+  assertEqual(hist[1].status, 'success');
+  assertEqual(hist[2].status, 'skipped');
+});
+
+test('different schedule ids do not collapse together', () => {
+  const f = makeScheduler();
+  f.ptyManager.setSession('sess-A', false);
+  const s1 = f.sched.create('sess-A', { command: 'a', kind: 'recurring', delayMs: 5000 });
+  const s2 = f.sched.create('sess-A', { command: 'b', kind: 'recurring', delayMs: 5000 });
+  f.sched.start();
+  f.armed.filter(h => h.ms === 5000).forEach(h => h.fn()); // both fire once
+  const hist = f.sched.listHistory('sess-A');
+  assertEqual(hist.length, 2);
+  assertEqual(hist[0].skipCount, 1);
+  assertEqual(hist[1].skipCount, 1);
+});
+
+test('history cap: 51 appends → 50 newest retained', () => {
+  const f = makeScheduler();
+  // Bypass through internal API for speed
+  for (let i = 0; i < 51; i++) {
+    f.sched._appendHistory('sess-A', {
+      id: 'id-' + i, command: 'c-' + i, firedAt: 1000 + i, scheduledAt: 1000 + i,
+      status: 'success', skipReason: null, skipCount: 1,
+    });
+  }
+  const hist = f.sched.listHistory('sess-A');
+  assertEqual(hist.length, 50);
+  // Newest first → command "c-50"
+  assertEqual(hist[0].command, 'c-50');
+  // Oldest retained is c-1 (c-0 was pruned)
+  assertEqual(hist[hist.length - 1].command, 'c-1');
+});
+
 console.log(`\n  Results: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);
