@@ -9161,17 +9161,18 @@ class CWMApp {
         }
       }
 
-      // Inline clock icon next to the pane title
+      // Inline clock icon inside the title span (right after the text) so it
+      // sits flush against the title without being pushed by header flex gap.
       const titleEl = paneEl.querySelector('.terminal-pane-title');
       if (titleEl) {
-        let titleClock = titleEl.parentElement.querySelector('.pane-title-clock');
+        let titleClock = titleEl.querySelector('.pane-title-clock');
         if (n > 0) {
           if (!titleClock) {
             titleClock = document.createElement('span');
             titleClock.className = 'pane-title-clock';
             titleClock.title = 'Has scheduled messages';
             titleClock.innerHTML = '<svg width="12" height="12"><use href="#icon-clock"/></svg>';
-            titleEl.insertAdjacentElement('afterend', titleClock);
+            titleEl.appendChild(titleClock);
           }
         } else if (titleClock) {
           titleClock.remove();
@@ -9179,7 +9180,8 @@ class CWMApp {
       }
     }
 
-    // Sidebar session items
+    // Sidebar session items. .session-name uses ellipsis overflow, so a
+    // trailing icon would get clipped. Prepend it so it's always visible.
     const list = this.els && this.els.sessionList;
     if (list) {
       list.querySelectorAll('.session-item[data-id]').forEach(item => {
@@ -9194,7 +9196,7 @@ class CWMApp {
             icon.className = 'session-schedule-clock';
             icon.title = `${n} scheduled message${n === 1 ? '' : 's'}`;
             icon.innerHTML = '<svg width="11" height="11"><use href="#icon-clock"/></svg>';
-            nameEl.appendChild(icon);
+            nameEl.prepend(icon);
           } else {
             icon.title = `${n} scheduled message${n === 1 ? '' : 's'}`;
           }

@@ -10090,7 +10090,10 @@ html {
 .session-schedule-clock,
 .pane-title-clock {
   display: inline-flex; align-items: center; justify-content: center;
-  margin-left: 6px; color: var(--mauve);
+  color: var(--mauve);
   vertical-align: middle;
 }
-.pane-title-clock { margin-left: 4px; opacity: 0.85; }
+/* Sidebar icon is prepended (icon → text), so margin sits on the right. */
+.session-schedule-clock { margin-right: 6px; }
+/* Pane-title icon sits inside the title span after the text. */
+.pane-title-clock { margin-left: 6px; opacity: 0.85; }
