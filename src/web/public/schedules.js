@@ -121,11 +121,6 @@
     },
 
     _renderActive() {
-      // Pre-fill the datetime-local input with the current local time so the
-      // user only has to nudge it, not type the whole stamp from scratch.
-      const now = new Date();
-      const tzOffsetMs = now.getTimezoneOffset() * 60_000;
-      const localIso = new Date(now.getTime() - tzOffsetMs).toISOString().slice(0, 16);
       return `
         <form class="schedule-form" data-form>
           <label>Message
@@ -144,7 +139,7 @@
           </div>
           <div class="row">
             <label><input type="radio" name="when" value="at" /> at</label>
-            <input type="datetime-local" name="fireAt" value="${localIso}" />
+            <input type="datetime-local" name="fireAt" />
           </div>
           <label class="row">
             <input type="checkbox" name="repeat" />
