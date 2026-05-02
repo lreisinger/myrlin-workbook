@@ -164,6 +164,110 @@ class Scheduler {
     delete this._history[sessionId];
     this._scheduleSave();
   }
+
+  // ── Lifecycle ──────────────────────────────────────────────────
+
+  start() {
+    if (this._started) return;
+    this._started = true;
+
+    // Arm timer for every active schedule. Boot recovery (Task 4) will
+    // pre-process missed schedules before this loop runs.
+    for (const id of Object.keys(this._schedules)) {
+      this._armOne(id);
+    }
+
+    // Subscribe to session deletion (Task 4 implements the handler)
+    if (this.store && typeof this.store.on === 'function') {
+      this._onSessionDeleted = ({ id }) => this._handleSessionDeleted(id);
+      this.store.on('session:deleted', this._onSessionDeleted);
+    }
+  }
+
+  stop() {
+    this._started = false;
+    for (const id of Object.keys(this._timers)) {
+      this.schedule.cancel(this._timers[id]);
+    }
+    this._timers = {};
+    if (this._saveTimer) {
+      this.schedule.cancel(this._saveTimer);
+      this._saveTimer = null;
+      this._writeSync();
+    }
+    if (this.store && this._onSessionDeleted) {
+      this.store.off('session:deleted', this._onSessionDeleted);
+      this._onSessionDeleted = null;
+    }
+  }
+
+  _armOne(scheduleId) {
+    const s = this._schedules[scheduleId];
+    if (!s) return;
+    const delay = Math.max(0, s.nextFireAt - this.clock.now());
+    this._timers[scheduleId] = this.schedule(() => this._fire(scheduleId), delay);
+  }
+
+  // ── Fire flow ─────────────────────────────────────────────────
+
+  _fire(scheduleId) {
+    const s = this._schedules[scheduleId];
+    if (!s) return;
+    delete this._timers[scheduleId];
+
+    const session = this.ptyManager && this.ptyManager.getSession(s.sessionId);
+    const alive = !!(session && session.alive);
+    const scheduledAt = s.nextFireAt;
+    const firedAt = this.clock.now();
+
+    if (!alive) {
+      this._appendHistory(s.sessionId, {
+        id: s.id, command: s.command, firedAt, scheduledAt,
+        status: 'skipped', skipReason: 'session-not-running', skipCount: 1,
+      });
+      if (s.kind === 'once') {
+        delete this._schedules[s.id];
+      } else {
+        s.nextFireAt = firedAt + s.delayMs;
+        this._armOne(s.id);
+      }
+      this._scheduleSave();
+      return;
+    }
+
+    // Success path
+    try {
+      session.pty.write(s.command + '\r');
+    } catch (err) {
+      console.error('[Scheduler] pty.write failed:', err.message);
+    }
+
+    this._appendHistory(s.sessionId, {
+      id: s.id, command: s.command, firedAt, scheduledAt,
+      status: 'success', skipReason: null, skipCount: 1,
+    });
+
+    if (s.kind === 'once') {
+      delete this._schedules[s.id];
+    } else {
+      s.nextFireAt = firedAt + s.delayMs;
+      this._armOne(s.id);
+    }
+    this._scheduleSave();
+  }
+
+  _appendHistory(sessionId, row) {
+    if (!this._history[sessionId]) this._history[sessionId] = [];
+    this._history[sessionId].push(row);
+    // Cap (Task 3 enforces collapse + cap; this naive append is replaced there).
+    if (this._history[sessionId].length > HISTORY_CAP_PER_SESSION) {
+      this._history[sessionId] = this._history[sessionId].slice(-HISTORY_CAP_PER_SESSION);
+    }
+  }
+
+  _handleSessionDeleted(_sessionId) {
+    // Implemented in Task 4.
+  }
 }
 
 module.exports = { Scheduler, MIN_DELAY_MS, MAX_DELAY_MS, MAX_COMMAND_BYTES, HISTORY_CAP_PER_SESSION };

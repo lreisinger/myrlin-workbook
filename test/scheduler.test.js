@@ -163,5 +163,74 @@ test('round-trip: persisted schedules survive reload', () => {
   assertEqual(fresh.listActive('sess-A')[0].command, 'persist me');
 });
 
+console.log('\n  Scheduler — fire flow (success path)');
+
+test('start() arms a timer for every active schedule', () => {
+  const f = makeScheduler();
+  f.sched.create('sess-A', { command: 'x', kind: 'once', delayMs: 5000 });
+  f.sched.create('sess-A', { command: 'y', kind: 'recurring', delayMs: 10000 });
+  f.sched.start();
+  // Two timers armed (excluding the save-debounce timer which uses same `schedule` stub)
+  const fireTimers = f.armed.filter(h => h.ms === 5000 || h.ms === 10000);
+  assertEqual(fireTimers.length, 2);
+});
+
+test('fire() writes command + carriage return to alive pty', () => {
+  const f = makeScheduler();
+  f.ptyManager.setSession('sess-A', /*alive*/ true);
+  const s = f.sched.create('sess-A', { command: 'npm test', kind: 'once', delayMs: 1000 });
+  f.sched.start();
+  const handle = f.armed.find(h => h.ms === 1000);
+  f.clock.advance(1000);
+  handle.fn();
+  assertEqual(f.ptyManager.writes.length, 1);
+  assertEqual(f.ptyManager.writes[0].id, 'sess-A');
+  assertEqual(f.ptyManager.writes[0].data, 'npm test\r');
+});
+
+test('one-off schedule deletes after successful fire', () => {
+  const f = makeScheduler();
+  f.ptyManager.setSession('sess-A', true);
+  const s = f.sched.create('sess-A', { command: 'x', kind: 'once', delayMs: 1000 });
+  f.sched.start();
+  const handle = f.armed.find(h => h.ms === 1000);
+  f.clock.advance(1000);
+  handle.fn();
+  assertEqual(f.sched.listActive('sess-A').length, 0);
+});
+
+test('recurring schedule re-arms with delayMs after fire', () => {
+  const f = makeScheduler();
+  f.ptyManager.setSession('sess-A', true);
+  const s = f.sched.create('sess-A', { command: 'x', kind: 'recurring', delayMs: 5000 });
+  f.sched.start();
+  const handle1 = f.armed.find(h => h.ms === 5000);
+  f.clock.advance(5000);
+  handle1.fn();
+  // Schedule still active, nextFireAt advanced
+  const active = f.sched.listActive('sess-A');
+  assertEqual(active.length, 1);
+  assertEqual(active[0].nextFireAt, f.clock.now() + 5000);
+  // A new timer armed for next fire
+  const next = f.armed.filter(h => h.ms === 5000);
+  assertEqual(next.length, 2);
+});
+
+test('successful fire appends a success history row', () => {
+  const f = makeScheduler();
+  f.ptyManager.setSession('sess-A', true);
+  const s = f.sched.create('sess-A', { command: 'echo hi', kind: 'once', delayMs: 1000 });
+  f.sched.start();
+  const handle = f.armed.find(h => h.ms === 1000);
+  f.clock.advance(1000);
+  handle.fn();
+  const hist = f.sched.listHistory('sess-A');
+  assertEqual(hist.length, 1);
+  assertEqual(hist[0].status, 'success');
+  assertEqual(hist[0].command, 'echo hi');
+  assertEqual(hist[0].firedAt, f.clock.now());
+  assertEqual(hist[0].scheduledAt, s.nextFireAt);
+});
+
 console.log(`\n  Results: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);
