@@ -10081,3 +10081,12 @@ html {
 }
 .schedule-row .trash:hover { color: var(--red); background: var(--surface2); }
 .schedule-empty { color: var(--subtext0); font-size: 12px; padding: 8px 0; text-align: center; }
+
+/* ─── Schedule indicators (sidebar + pane title) ───────── */
+.session-schedule-clock,
+.pane-title-clock {
+  display: inline-flex; align-items: center; justify-content: center;
+  margin-left: 6px; color: var(--mauve);
+  vertical-align: middle;
+}
+.pane-title-clock { margin-left: 4px; opacity: 0.85; }

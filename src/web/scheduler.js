@@ -169,6 +169,20 @@ class Scheduler {
     this._scheduleSave();
   }
 
+  /**
+   * Active-schedule count per session id, for driving UI indicators
+   * (pane badges, sidebar clock icons) without requiring the frontend to
+   * fan out N requests across every visible session.
+   * @returns {Object<string, number>}
+   */
+  activeCounts() {
+    const out = {};
+    for (const s of Object.values(this._schedules)) {
+      out[s.sessionId] = (out[s.sessionId] || 0) + 1;
+    }
+    return out;
+  }
+
   // ── Lifecycle ──────────────────────────────────────────────────
 
   start() {

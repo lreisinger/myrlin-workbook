@@ -4,6 +4,10 @@
  */
 
 function mountScheduleRoutes(app, { requireAuth, scheduler, store }) {
+  app.get('/api/schedules/summary', requireAuth, (req, res) => {
+    res.json({ counts: scheduler.activeCounts() });
+  });
+
   app.get('/api/sessions/:id/schedules', requireAuth, (req, res) => {
     res.json({
       active: scheduler.listActive(req.params.id),

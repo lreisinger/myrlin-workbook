@@ -121,10 +121,15 @@
     },
 
     _renderActive() {
+      // Pre-fill the datetime-local input with the current local time so the
+      // user only has to nudge it, not type the whole stamp from scratch.
+      const now = new Date();
+      const tzOffsetMs = now.getTimezoneOffset() * 60_000;
+      const localIso = new Date(now.getTime() - tzOffsetMs).toISOString().slice(0, 16);
       return `
         <form class="schedule-form" data-form>
-          <label>Command
-            <input type="text" name="command" maxlength="2048" placeholder="e.g. npm test" required />
+          <label>Message
+            <input type="text" name="command" maxlength="2048" placeholder="Message.." required />
           </label>
           <label>When</label>
           <div class="row">
@@ -139,7 +144,7 @@
           </div>
           <div class="row">
             <label><input type="radio" name="when" value="at" /> at</label>
-            <input type="datetime-local" name="fireAt" />
+            <input type="datetime-local" name="fireAt" value="${localIso}" />
           </div>
           <label class="row">
             <input type="checkbox" name="repeat" />
@@ -159,6 +164,9 @@
       const form = body.querySelector('[data-form]');
       const errorEl = body.querySelector('[data-form-error]');
       const repeatBox = form.querySelector('input[name="repeat"]');
+      // Auto-focus the message field so the user can start typing immediately.
+      const msgInput = form.querySelector('input[name="command"]');
+      if (msgInput) setTimeout(() => msgInput.focus(), 0);
       const inMode = () => form.querySelector('input[name="when"]:checked').value === 'in';
       const updateRepeatEnable = () => {
         repeatBox.disabled = !inMode();
@@ -204,6 +212,7 @@
           updateRepeatEnable();
           await this._refreshList();
           this._refreshBadge();
+          if (window.cwm && window.cwm.refreshScheduleIndicators) window.cwm.refreshScheduleIndicators();
         } catch (err) {
           errorEl.textContent = err.message || 'Network error';
         }
@@ -249,6 +258,7 @@
           const id = row.dataset.id;
           await SchedulePopover._fetch('DELETE', '/' + id);
           await this._refreshList();
+          if (window.cwm && window.cwm.refreshScheduleIndicators) window.cwm.refreshScheduleIndicators();
         });
       });
       this._tickRelativeLabels(listEl);

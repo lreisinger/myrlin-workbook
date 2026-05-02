@@ -1847,6 +1847,7 @@ class CWMApp {
     this.connectSSE();
     this.startConflictChecks();
     this.checkForUpdates();
+    this.startSchedulePolling();
   }
 
   async init() {
@@ -5037,7 +5038,7 @@ class CWMApp {
     panel._wsId = ws.id;
 
     panel.replaceChildren();
-    const container = document.createElement('div');
+    container = document.createElement('div');
     container.className = 'files-container';
 
     const sidebar = document.createElement('div');
@@ -5379,7 +5380,7 @@ class CWMApp {
 
       panel.textContent = '';
 
-      const container = document.createElement('div');
+      container = document.createElement('div');
       container.className = 'git-panel-container';
 
       const left = document.createElement('div');
@@ -9113,6 +9114,97 @@ class CWMApp {
     this._renderContextItems(group.name, items, x, y);
   }
 
+  /**
+   * Poll /api/schedules/summary every 10 s and apply active-schedule
+   * indicators to pane badges, pane titles, and sidebar session items.
+   * Refreshes on the same cadence as the existing per-pane git poller.
+   */
+  startSchedulePolling() {
+    if (this._scheduleSummaryInterval) return;
+    this._scheduleCounts = {};
+    this.refreshScheduleIndicators();
+    this._scheduleSummaryInterval = setInterval(() => this.refreshScheduleIndicators(), 10_000);
+  }
+
+  async refreshScheduleIndicators() {
+    if (!this.state || !this.state.token) return;
+    try {
+      const r = await fetch('/api/schedules/summary', {
+        headers: { Authorization: 'Bearer ' + this.state.token },
+        credentials: 'same-origin',
+      });
+      if (!r.ok) return;
+      const data = await r.json();
+      this._scheduleCounts = (data && data.counts) || {};
+      this.applyScheduleIndicators();
+    } catch (_) { /* network blip — try again next tick */ }
+  }
+
+  applyScheduleIndicators() {
+    const counts = this._scheduleCounts || {};
+
+    // Pane badge + title-bar clock for each terminal pane
+    for (let i = 0; i < 6; i++) {
+      const paneEl = document.getElementById(`term-pane-${i}`);
+      if (!paneEl) continue;
+      const tp = this.terminalPanes[i];
+      const sid = tp ? tp.sessionId : null;
+      const n = sid ? (counts[sid] || 0) : 0;
+
+      // Floating clock button badge (number)
+      const btn = paneEl.querySelector('.terminal-pane-schedule');
+      if (btn) {
+        const badge = btn.querySelector('.pane-schedule-count');
+        if (badge) {
+          badge.textContent = n > 0 ? String(n) : '';
+          badge.hidden = !(n > 0);
+        }
+      }
+
+      // Inline clock icon next to the pane title
+      const titleEl = paneEl.querySelector('.terminal-pane-title');
+      if (titleEl) {
+        let titleClock = titleEl.parentElement.querySelector('.pane-title-clock');
+        if (n > 0) {
+          if (!titleClock) {
+            titleClock = document.createElement('span');
+            titleClock.className = 'pane-title-clock';
+            titleClock.title = 'Has scheduled messages';
+            titleClock.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.5"/><polyline points="8 4 8 8 10.5 9.5"/></svg>';
+            titleEl.insertAdjacentElement('afterend', titleClock);
+          }
+        } else if (titleClock) {
+          titleClock.remove();
+        }
+      }
+    }
+
+    // Sidebar session items
+    const list = this.els && this.els.sessionList;
+    if (list) {
+      list.querySelectorAll('.session-item[data-id]').forEach(item => {
+        const sid = item.dataset.id;
+        const n = counts[sid] || 0;
+        const nameEl = item.querySelector('.session-name');
+        if (!nameEl) return;
+        let icon = nameEl.querySelector('.session-schedule-clock');
+        if (n > 0) {
+          if (!icon) {
+            icon = document.createElement('span');
+            icon.className = 'session-schedule-clock';
+            icon.title = `${n} scheduled message${n === 1 ? '' : 's'}`;
+            icon.innerHTML = '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.5"/><polyline points="8 4 8 8 10.5 9.5"/></svg>';
+            nameEl.appendChild(icon);
+          } else {
+            icon.title = `${n} scheduled message${n === 1 ? '' : 's'}`;
+          }
+        } else if (icon) {
+          icon.remove();
+        }
+      });
+    }
+  }
+
   renderSessions() {
     const list = this.els.sessionList;
     const sessions = this.state.sessions.filter(s => this.state.showHidden || !this.state.hiddenSessions.has(s.id));
@@ -9154,6 +9246,9 @@ class CWMApp {
         </div>`;
     }).join('');
 
+
+    // Re-apply schedule indicators since renderSessions() rewrites the list
+    if (this._scheduleCounts) this.applyScheduleIndicators();
 
     // Async: patch in git branch badges
     const sessionItems = list.querySelectorAll('.session-item[data-id]');
@@ -10253,19 +10348,9 @@ class CWMApp {
     const scheduleBtn2 = paneEl.querySelector('.terminal-pane-schedule');
     if (scheduleBtn2) {
       scheduleBtn2.hidden = false;
-      // Initial fetch so the badge reflects existing schedules.
-      const token = (this.state && this.state.token) || window.AUTH_TOKEN;
-      fetch(`/api/sessions/${encodeURIComponent(sessionId)}/schedules`, {
-        headers: token ? { authorization: 'Bearer ' + token } : {},
-        credentials: 'same-origin',
-      }).then(r => r.json()).then(data => {
-        const n = (data && data.active) ? data.active.length : 0;
-        const badge = scheduleBtn2.querySelector('.pane-schedule-count');
-        if (badge) {
-          badge.textContent = n > 0 ? String(n) : '';
-          badge.hidden = !(n > 0);
-        }
-      }).catch(() => {});
+      // The 10 s schedule poller drives the badge; kick off an immediate
+      // refresh so a freshly-attached pane reflects current state right away.
+      if (this.refreshScheduleIndicators) this.refreshScheduleIndicators();
     }
     // Show mic button if SpeechRecognition is supported
     const micBtn2 = paneEl.querySelector('.terminal-pane-mic');
