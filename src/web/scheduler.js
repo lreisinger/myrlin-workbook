@@ -171,13 +171,32 @@ class Scheduler {
     if (this._started) return;
     this._started = true;
 
-    // Arm timer for every active schedule. Boot recovery (Task 4) will
-    // pre-process missed schedules before this loop runs.
+    // Boot recovery: pre-process schedules whose nextFireAt has elapsed.
+    const now = this.clock.now();
+    for (const id of Object.keys(this._schedules)) {
+      const s = this._schedules[id];
+      if (s.nextFireAt < now) {
+        if (s.kind === 'once') {
+          this._appendHistory(s.sessionId, {
+            id: s.id, command: s.command,
+            firedAt: now, scheduledAt: s.nextFireAt,
+            status: 'skipped', skipReason: 'missed-while-down', skipCount: 1,
+          });
+          delete this._schedules[id];
+        } else {
+          // recurring: no catch-up, advance to now + delayMs
+          s.nextFireAt = now + s.delayMs;
+        }
+      }
+    }
+    this._scheduleSave();
+
+    // Arm timers for everything still active
     for (const id of Object.keys(this._schedules)) {
       this._armOne(id);
     }
 
-    // Subscribe to session deletion (Task 4 implements the handler)
+    // Subscribe to store cleanup
     if (this.store && typeof this.store.on === 'function') {
       this._onSessionDeleted = ({ id }) => this._handleSessionDeleted(id);
       this.store.on('session:deleted', this._onSessionDeleted);
@@ -277,8 +296,22 @@ class Scheduler {
     }
   }
 
-  _handleSessionDeleted(_sessionId) {
-    // Implemented in Task 4.
+  _handleSessionDeleted(sessionId) {
+    let changed = false;
+    for (const id of Object.keys(this._schedules)) {
+      if (this._schedules[id].sessionId === sessionId) {
+        const timer = this._timers[id];
+        if (timer) this.schedule.cancel(timer);
+        delete this._timers[id];
+        delete this._schedules[id];
+        changed = true;
+      }
+    }
+    if (this._history[sessionId]) {
+      delete this._history[sessionId];
+      changed = true;
+    }
+    if (changed) this._scheduleSave();
   }
 }
 

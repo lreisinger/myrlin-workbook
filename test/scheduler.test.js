@@ -327,5 +327,83 @@ test('history cap: 51 appends → 50 newest retained', () => {
   assertEqual(hist[hist.length - 1].command, 'c-1');
 });
 
+console.log('\n  Scheduler — boot recovery');
+
+test('start(): missed once → skipped+deleted, no timer armed', () => {
+  // Build a state file directly so the next instance boots with stale state
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-test-'));
+  const dataFile = path.join(dir, 'schedules.json');
+  fs.writeFileSync(dataFile, JSON.stringify({
+    schedules: {
+      'sched-1': {
+        id: 'sched-1', sessionId: 'sess-A', command: 'late',
+        kind: 'once', delayMs: 60000,
+        nextFireAt: 1000,            // way in the past (vs clock 1.7e12)
+        createdAt: 500,
+      },
+    },
+    history: {},
+  }));
+  const f = makeScheduler({ dataFile });
+  f.sched.start();
+  assertEqual(f.sched.listActive('sess-A').length, 0);
+  const hist = f.sched.listHistory('sess-A');
+  assertEqual(hist.length, 1);
+  assertEqual(hist[0].status, 'skipped');
+  assertEqual(hist[0].skipReason, 'missed-while-down');
+});
+
+test('start(): missed recurring → advanced, armed, no history row', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-test-'));
+  const dataFile = path.join(dir, 'schedules.json');
+  fs.writeFileSync(dataFile, JSON.stringify({
+    schedules: {
+      'sched-2': {
+        id: 'sched-2', sessionId: 'sess-A', command: 'tick',
+        kind: 'recurring', delayMs: 5000,
+        nextFireAt: 1000,
+        createdAt: 500,
+      },
+    },
+    history: {},
+  }));
+  const f = makeScheduler({ dataFile });
+  f.sched.start();
+  const active = f.sched.listActive('sess-A');
+  assertEqual(active.length, 1);
+  assertEqual(active[0].nextFireAt, f.clock.now() + 5000);
+  // Timer armed
+  assert(f.armed.some(h => h.ms === 5000), 'timer armed for recurring');
+  // No history row
+  assertEqual(f.sched.listHistory('sess-A').length, 0);
+});
+
+test('start(): future once → timer armed for the remaining delay', () => {
+  const f = makeScheduler();
+  const s = f.sched.create('sess-A', { command: 'x', kind: 'once', delayMs: 30_000 });
+  f.sched.start();
+  assert(f.armed.some(h => h.ms === 30_000), 'expected 30s timer armed');
+});
+
+console.log('\n  Scheduler — store cleanup');
+
+test('session:deleted clears that session\'s schedules and history', () => {
+  const f = makeScheduler();
+  f.ptyManager.setSession('sess-A', false);
+  f.sched.create('sess-A', { command: 'x', kind: 'recurring', delayMs: 5000 });
+  f.sched.create('sess-B', { command: 'y', kind: 'recurring', delayMs: 5000 });
+  f.sched.start();
+  // Drop a history row for sess-A
+  f.armed.filter(h => h.ms === 5000)[0].fn();
+  assert(f.sched.listActive('sess-A').length > 0);
+  assert(f.sched.listHistory('sess-A').length > 0);
+  // Emit deletion
+  f.store.emit('session:deleted', { id: 'sess-A' });
+  assertEqual(f.sched.listActive('sess-A').length, 0);
+  assertEqual(f.sched.listHistory('sess-A').length, 0);
+  // sess-B untouched
+  assertEqual(f.sched.listActive('sess-B').length, 1);
+});
+
 console.log(`\n  Results: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);
