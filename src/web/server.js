@@ -7991,6 +7991,7 @@ app.use((err, req, res, _next) => {
  */
 // Reference to PTY manager for cleanup on shutdown
 let _ptyManager = null;
+let _scheduler = null;
 
 /**
  * Backfill resumeSessionId for sessions that have a workingDir but no resumeSessionId.
@@ -8045,8 +8046,18 @@ function startServer(port = 3456, host = '127.0.0.1') {
   const { ptyWss, ptyManager } = attachPtyWebSocket(server);
   _ptyManager = ptyManager;
 
-  // Cleanup tunnels and PTY sessions on shutdown
+  // ─── Scheduler ───────────────────────────────────────────────
+  const { Scheduler } = require('./scheduler');
+  const { mountScheduleRoutes } = require('./scheduler-routes');
+  _scheduler = new Scheduler({ ptyManager: _ptyManager, store: getStore() });
+  _scheduler.start();
+  mountScheduleRoutes(app, { requireAuth, scheduler: _scheduler, store: getStore() });
+
+  // Cleanup tunnels, scheduler, and PTY sessions on shutdown
   const cleanup = () => {
+    if (_scheduler) {
+      try { _scheduler.stop(); } catch (_) {}
+    }
     if (_ptyManager) {
       try { _ptyManager.destroyAll(); } catch (_) {}
     }
