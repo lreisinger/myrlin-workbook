@@ -10104,6 +10104,17 @@ class CWMApp {
           });
         }
 
+        // Schedule clock button — opens the schedule popover for this pane's session
+        const scheduleBtn = pane.querySelector('.terminal-pane-schedule');
+        if (scheduleBtn) {
+          scheduleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const tp = this.terminalPanes[slotIdx];
+            if (!tp || !tp.sessionId) return;
+            if (window.SchedulePopover) window.SchedulePopover.toggle(scheduleBtn, tp.sessionId);
+          });
+        }
+
         // Pane view back button — restores terminal after a non-terminal view (E003)
         const backBtn = pane.querySelector('.pane-view-back');
         if (backBtn) {
@@ -10239,6 +10250,23 @@ class CWMApp {
     if (closeBtn) closeBtn.hidden = false;
     const uploadBtn2 = paneEl.querySelector('.terminal-pane-upload');
     if (uploadBtn2) uploadBtn2.hidden = false;
+    const scheduleBtn2 = paneEl.querySelector('.terminal-pane-schedule');
+    if (scheduleBtn2) {
+      scheduleBtn2.hidden = false;
+      // Initial fetch so the badge reflects existing schedules.
+      const token = (this.state && this.state.token) || window.AUTH_TOKEN;
+      fetch(`/api/sessions/${encodeURIComponent(sessionId)}/schedules`, {
+        headers: token ? { authorization: 'Bearer ' + token } : {},
+        credentials: 'same-origin',
+      }).then(r => r.json()).then(data => {
+        const n = (data && data.active) ? data.active.length : 0;
+        const badge = scheduleBtn2.querySelector('.pane-schedule-count');
+        if (badge) {
+          badge.textContent = n > 0 ? String(n) : '';
+          badge.hidden = !(n > 0);
+        }
+      }).catch(() => {});
+    }
     // Show mic button if SpeechRecognition is supported
     const micBtn2 = paneEl.querySelector('.terminal-pane-mic');
     if (micBtn2 && this._speechRecognitionAvailable) micBtn2.hidden = false;
@@ -10265,11 +10293,17 @@ class CWMApp {
       this.terminalPanes[idx] = null;
       const deadPane = document.getElementById(`term-pane-${idx}`);
       if (deadPane) {
+        // Close the schedule popover if it was anchored to this pane.
+        if (window.SchedulePopover && window.SchedulePopover.anchor && deadPane.contains(window.SchedulePopover.anchor)) {
+          window.SchedulePopover.close();
+        }
         deadPane.classList.add('terminal-pane-empty');
         const header = deadPane.querySelector('.terminal-pane-title');
         if (header) header.textContent = 'Drop a session here';
         const closeBtn2 = deadPane.querySelector('.terminal-pane-close');
         if (closeBtn2) closeBtn2.hidden = true;
+        const scheduleBtn3 = deadPane.querySelector('.terminal-pane-schedule');
+        if (scheduleBtn3) scheduleBtn3.hidden = true;
       }
       this.updateTerminalGridLayout();
     };
@@ -10706,6 +10740,13 @@ class CWMApp {
   }
 
   closeTerminalPane(slotIdx) {
+    // If our schedule popover is anchored on this pane's clock, close it.
+    if (window.SchedulePopover && window.SchedulePopover.anchor) {
+      const paneElForPopover = document.getElementById(`term-pane-${slotIdx}`);
+      if (paneElForPopover && paneElForPopover.contains(window.SchedulePopover.anchor)) {
+        window.SchedulePopover.close();
+      }
+    }
     if (this._paneRefreshTimers[slotIdx]) {
       clearInterval(this._paneRefreshTimers[slotIdx]);
       delete this._paneRefreshTimers[slotIdx];
@@ -10732,6 +10773,12 @@ class CWMApp {
     if (closeBtn) closeBtn.hidden = true;
     const uploadBtn3 = paneEl.querySelector('.terminal-pane-upload');
     if (uploadBtn3) uploadBtn3.hidden = true;
+    const scheduleBtn3 = paneEl.querySelector('.terminal-pane-schedule');
+    if (scheduleBtn3) {
+      scheduleBtn3.hidden = true;
+      const badge = scheduleBtn3.querySelector('.pane-schedule-count');
+      if (badge) { badge.textContent = ''; badge.hidden = true; }
+    }
     // Collapse any active expansion before closing
     this._collapseExpandPane(slotIdx);
     const expandBtn3 = paneEl.querySelector('.terminal-pane-expand');
@@ -11046,6 +11093,7 @@ class CWMApp {
       const titleEl = paneEl ? paneEl.querySelector('.terminal-pane-title') : null;
       const closeBtn = paneEl ? paneEl.querySelector('.terminal-pane-close') : null;
       const uploadBtnEl = paneEl ? paneEl.querySelector('.terminal-pane-upload') : null;
+      const scheduleBtnEl = paneEl ? paneEl.querySelector('.terminal-pane-schedule') : null;
       const micBtnEl = paneEl ? paneEl.querySelector('.terminal-pane-mic') : null;
       if (!paneEl) return;
 
@@ -11056,6 +11104,7 @@ class CWMApp {
         if (titleEl) titleEl.textContent = tp.sessionName || tp.sessionId;
         if (closeBtn) closeBtn.hidden = false;
         if (uploadBtnEl) uploadBtnEl.hidden = false;
+        if (scheduleBtnEl) scheduleBtnEl.hidden = false;
         if (micBtnEl && this._speechRecognitionAvailable) micBtnEl.hidden = false;
         // Move the xterm element into the new container
         if (container && tp.term) {
@@ -11072,6 +11121,11 @@ class CWMApp {
         if (titleEl) titleEl.textContent = 'Drop a session here';
         if (closeBtn) closeBtn.hidden = true;
         if (uploadBtnEl) uploadBtnEl.hidden = true;
+        if (scheduleBtnEl) {
+          scheduleBtnEl.hidden = true;
+          const badge = scheduleBtnEl.querySelector('.pane-schedule-count');
+          if (badge) { badge.textContent = ''; badge.hidden = true; }
+        }
         if (micBtnEl) { micBtnEl.hidden = true; micBtnEl.classList.remove('mic-active'); }
         if (container) container.innerHTML = '';
       }
