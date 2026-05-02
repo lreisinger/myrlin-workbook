@@ -588,6 +588,15 @@ class CWMApp {
       obs.observe(document.body, { childList: true, subtree: true });
     }
 
+    // While any HTML5 drag is active, mark <body> so the mobile sidebar
+    // backdrop becomes pointer-events: none. Without this, on mobile the
+    // backdrop occludes terminal panes for elementFromPoint, so the
+    // DragDropTouch polyfill never fires dragover/drop on the pane behind it.
+    document.addEventListener('dragstart', () => document.body.classList.add('cwm-dragging'), true);
+    const clearDragging = () => document.body.classList.remove('cwm-dragging');
+    document.addEventListener('dragend', clearDragging, true);
+    document.addEventListener('drop', clearDragging, true);
+
     // Sidebar toggle (mobile)
     this.els.sidebarToggle.addEventListener('click', () => this.toggleSidebar());
 
@@ -7564,15 +7573,15 @@ class CWMApp {
     let startX = 0;
     let startWidth = 0;
 
-    const onMouseMove = (e) => {
+    const onMove = (clientX) => {
       if (!isResizing) return;
-      const dx = e.clientX - startX;
+      const dx = clientX - startX;
       const newWidth = Math.max(180, Math.min(600, startWidth + dx));
       sidebar.style.width = newWidth + 'px';
       sidebar.style.transition = 'none'; // disable transition during drag
     };
 
-    const onMouseUp = () => {
+    const onEnd = () => {
       if (!isResizing) return;
       isResizing = false;
       handle.classList.remove('active');
@@ -7592,24 +7601,32 @@ class CWMApp {
       });
 
       document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
+      document.removeEventListener('mouseup', onEnd);
+      document.removeEventListener('touchmove', onTouchMove);
+      document.removeEventListener('touchend', onEnd);
+      document.removeEventListener('touchcancel', onEnd);
     };
 
-    handle.addEventListener('mousedown', (e) => {
-      // Don't resize if sidebar is collapsed
-      if (sidebar.classList.contains('collapsed')) return;
+    const onMouseMove = (e) => onMove(e.clientX);
+    const onTouchMove = (e) => { e.preventDefault(); onMove(e.touches[0].clientX); };
 
-      e.preventDefault();
+    const startResize = (clientX) => {
+      if (sidebar.classList.contains('collapsed')) return;
       isResizing = true;
-      startX = e.clientX;
+      startX = clientX;
       startWidth = sidebar.getBoundingClientRect().width;
       handle.classList.add('active');
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
-
       document.addEventListener('mousemove', onMouseMove);
-      document.addEventListener('mouseup', onMouseUp);
-    });
+      document.addEventListener('mouseup', onEnd);
+      document.addEventListener('touchmove', onTouchMove, { passive: false });
+      document.addEventListener('touchend', onEnd);
+      document.addEventListener('touchcancel', onEnd);
+    };
+
+    handle.addEventListener('mousedown', (e) => { e.preventDefault(); startResize(e.clientX); });
+    handle.addEventListener('touchstart', (e) => { e.preventDefault(); startResize(e.touches[0].clientX); }, { passive: false });
   }
 
   initSidebarSectionResize() {
@@ -9983,9 +10000,11 @@ class CWMApp {
           pane.classList.remove('drag-over');
           console.log('[DnD] Drop on pane', slotIdx, 'types:', Array.from(e.dataTransfer.types));
 
-          // Terminal pane swap/reposition - drag a pane header onto another pane
+          // Terminal pane swap/reposition - drag a pane header onto another pane.
+          // Use truthy check: native DataTransfer.getData returns '' for missing
+          // keys, but the touch polyfill returns undefined — both must skip.
           const swapSource = e.dataTransfer.getData('cwm/terminal-swap');
-          if (swapSource !== '') {
+          if (swapSource) {
             const srcSlot = parseInt(swapSource, 10);
             if (srcSlot !== slotIdx) {
               this.swapTerminalPanes(srcSlot, slotIdx);
@@ -11463,9 +11482,12 @@ class CWMApp {
     grid.addEventListener('touchmove', (e) => {
       // Only intercept when terminal is the active view on mobile
       if (!document.body.classList.contains('terminal-active')) return;
-      // Allow the touch event for xterm's internal scroll handling,
-      // but stop it from propagating to the page/body scroll.
-      e.stopPropagation();
+      // Scope this to the xterm viewport only — otherwise we eat touchmoves on
+      // pane headers / resize handles and break things like the
+      // DragDropTouch polyfill (which listens on document in bubble phase).
+      // We don't stop propagation here anymore to allow index.html's hack 
+      // preventing the polyfill from breaking xterm's native scroll on desktop touch.
+      // (The polyfill needs to be suppressed, index.html does it on document level).
     }, { passive: true });
   }
 
@@ -11474,7 +11496,8 @@ class CWMApp {
    * Only active on mobile. Scoped to terminal-grid to avoid sidebar conflicts.
    */
   initTerminalPaneSwipe() {
-    if (window.innerWidth > 768) return;
+    // Enable touch pane swipe on any touch-capable device, not just phones.
+    if (!('ontouchstart' in window) && navigator.maxTouchPoints === 0) return;
 
     const grid = this.els.terminalGrid;
     if (!grid) return;
@@ -11532,50 +11555,73 @@ class CWMApp {
   }
 
   _setupResizeDrag(handle, direction) {
-    handle.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-
+    const start = (clientX, clientY, isTouch) => {
       const grid = this.els.terminalGrid;
       const gridRect = grid.getBoundingClientRect();
 
-      // Create a full-screen overlay to capture mouse events during drag
-      const overlay = document.createElement('div');
-      overlay.style.cssText = `position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;cursor:${direction === 'col' ? 'col-resize' : 'row-resize'};`;
-      document.body.appendChild(overlay);
+      // Mouse drags use a full-screen overlay to keep the resize cursor and
+      // capture stray mouse events. Touch drags don't need it (no cursor;
+      // touch tracking persists outside the handle naturally).
+      let overlay = null;
+      if (!isTouch) {
+        overlay = document.createElement('div');
+        overlay.style.cssText = `position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;cursor:${direction === 'col' ? 'col-resize' : 'row-resize'};`;
+        document.body.appendChild(overlay);
+      }
 
       handle.classList.add('active');
 
-      const onMove = (e) => {
+      const move = (cx, cy) => {
         if (direction === 'col') {
-          const ratio = (e.clientX - gridRect.left) / gridRect.width;
+          const ratio = (cx - gridRect.left) / gridRect.width;
           const clamped = Math.max(0.15, Math.min(0.85, ratio));
           this._gridColSizes = [clamped, 1 - clamped];
         } else {
-          const ratio = (e.clientY - gridRect.top) / gridRect.height;
+          const ratio = (cy - gridRect.top) / gridRect.height;
           const clamped = Math.max(0.15, Math.min(0.85, ratio));
           this._gridRowSizes = [clamped, 1 - clamped];
         }
         this._applyGridSizes();
       };
 
-      const onUp = () => {
+      const onMouseMove = (e) => move(e.clientX, e.clientY);
+      const onTouchMove = (e) => {
+        e.preventDefault();
+        move(e.touches[0].clientX, e.touches[0].clientY);
+      };
+      // Capture phase, because the terminal-grid has a bubble-phase touchmove
+      // listener that calls stopPropagation() — would otherwise eat our event.
+      const touchOpts = { passive: false, capture: true };
+      const onEnd = () => {
         handle.classList.remove('active');
-        overlay.remove();
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
-        // Refit all terminals after resize completes
-        // safeFit() handles both the fit and sending resize to the server
-        this.terminalPanes.forEach(tp => {
-          if (tp) tp.safeFit();
-        });
-        // Persist split ratios for this tab group
+        if (overlay) overlay.remove();
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onEnd);
+        document.removeEventListener('touchmove', onTouchMove, touchOpts);
+        document.removeEventListener('touchend', onEnd);
+        document.removeEventListener('touchcancel', onEnd);
+        this.terminalPanes.forEach(tp => { if (tp) tp.safeFit(); });
         this.saveTerminalLayout();
       };
 
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onEnd);
+      document.addEventListener('touchmove', onTouchMove, touchOpts);
+      document.addEventListener('touchend', onEnd);
+      document.addEventListener('touchcancel', onEnd);
+    };
+
+    handle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      start(e.clientX, e.clientY, false);
     });
+    handle.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const t = e.touches[0];
+      start(t.clientX, t.clientY, true);
+    }, { passive: false });
   }
 
   /**
@@ -13277,7 +13323,7 @@ class CWMApp {
         e.preventDefault();
         hdr.classList.remove('tab-drag-over');
         const swapSource = e.dataTransfer.getData('cwm/terminal-swap');
-        if (swapSource !== '') {
+        if (swapSource) {
           const srcSlot = parseInt(swapSource, 10);
           const folderTabs = this._tabGroups.filter(g => g.folderId === folderId);
           if (folderTabs.length > 0 && folderTabs[0].id !== this._activeGroupId) {
@@ -13367,7 +13413,7 @@ class CWMApp {
 
         // Handle terminal pane drop - move terminal to this tab group
         const swapSource = e.dataTransfer.getData('cwm/terminal-swap');
-        if (swapSource !== '') {
+        if (swapSource) {
           const srcSlot = parseInt(swapSource, 10);
           const targetGroupId = tab.dataset.groupId;
           if (targetGroupId !== this._activeGroupId) {
