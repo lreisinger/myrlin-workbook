@@ -1,0 +1,169 @@
+/**
+ * Scheduled messages engine.
+ *
+ * Fires shell commands into a pty session on a delay (one-off) or on repeat
+ * (recurring). State persists to ~/.myrlin/schedules.json so schedules survive
+ * server restarts. The engine is HTTP-agnostic: the route handlers in server.js
+ * are thin adapters.
+ *
+ * Constructor dependencies are injectable so the engine is unit-testable:
+ *   - ptyManager: must expose getSession(id) → { alive, pty: { write(s) } }
+ *   - store:      EventEmitter (the existing src/state/store Store), for session:deleted
+ *   - clock:      { now(): number } — defaults to Date
+ *   - schedule:   schedule(fn, ms) → handle; schedule.cancel(handle) — defaults to setTimeout
+ *   - dataFile:   absolute path to schedules.json — defaults to ~/.myrlin/schedules.json
+ */
+
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const { getDataDir } = require('../utils/data-dir');
+
+const MAX_DELAY_MS = 30 * 86_400_000; // 30 days
+const MIN_DELAY_MS = 1_000;           // 1 second
+const MAX_COMMAND_BYTES = 2048;
+const HISTORY_CAP_PER_SESSION = 50;
+const SAVE_DEBOUNCE_MS = 200;
+
+const DEFAULT_CLOCK = { now: () => Date.now() };
+function defaultSchedule(fn, ms) { return setTimeout(fn, ms); }
+defaultSchedule.cancel = (h) => clearTimeout(h);
+
+class Scheduler {
+  constructor({ dataFile, ptyManager, store, clock = DEFAULT_CLOCK, schedule = defaultSchedule } = {}) {
+    this.dataFile = dataFile || path.join(getDataDir(), 'schedules.json');
+    this.ptyManager = ptyManager;
+    this.store = store;
+    this.clock = clock;
+    this.schedule = schedule;
+
+    /** @type {Object.<string, Schedule>} */
+    this._schedules = {};
+    /** @type {Object.<string, HistoryRow[]>} */
+    this._history = {};
+    /** @type {Object.<string, any>} */
+    this._timers = {}; // scheduleId -> timer handle
+
+    this._saveTimer = null;
+    this._load();
+  }
+
+  // ── Persistence ────────────────────────────────────────────────
+
+  _load() {
+    try {
+      if (fs.existsSync(this.dataFile)) {
+        const raw = JSON.parse(fs.readFileSync(this.dataFile, 'utf8'));
+        this._schedules = raw.schedules || {};
+        this._history = raw.history || {};
+      }
+    } catch (_) {
+      this._schedules = {};
+      this._history = {};
+    }
+  }
+
+  _scheduleSave() {
+    if (this._saveTimer) return;
+    this._saveTimer = this.schedule(() => {
+      this._saveTimer = null;
+      this._writeSync();
+    }, SAVE_DEBOUNCE_MS);
+  }
+
+  flushSync() {
+    if (this._saveTimer) {
+      this.schedule.cancel(this._saveTimer);
+      this._saveTimer = null;
+    }
+    this._writeSync();
+  }
+
+  _writeSync() {
+    const dir = path.dirname(this.dataFile);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const tmp = this.dataFile + '.tmp';
+    const payload = JSON.stringify({ schedules: this._schedules, history: this._history }, null, 2);
+    fs.writeFileSync(tmp, payload, 'utf8');
+    fs.renameSync(tmp, this.dataFile);
+  }
+
+  // ── CRUD ───────────────────────────────────────────────────────
+
+  /**
+   * Validate and create a schedule. Persists asynchronously (debounced).
+   * @param {string} sessionId
+   * @param {{command:string, kind:'once'|'recurring', delayMs?:number, fireAt?:number}} def
+   * @returns {Schedule}
+   */
+  create(sessionId, def) {
+    if (!sessionId || typeof sessionId !== 'string') throw new Error('sessionId required');
+    if (!def || typeof def !== 'object') throw new Error('def required');
+
+    const command = def.command;
+    if (typeof command !== 'string' || command.length === 0) throw new Error('command must be a non-empty string');
+    if (Buffer.byteLength(command, 'utf8') > MAX_COMMAND_BYTES) throw new Error('command exceeds 2KB');
+
+    const kind = def.kind;
+    if (kind !== 'once' && kind !== 'recurring') throw new Error('kind must be "once" or "recurring"');
+
+    const hasDelay = Number.isFinite(def.delayMs);
+    const hasFireAt = Number.isFinite(def.fireAt);
+    if (kind === 'recurring' && !hasDelay) throw new Error('recurring requires delayMs');
+    if (kind === 'recurring' && hasFireAt) throw new Error('recurring cannot use fireAt');
+    if (kind === 'once' && hasDelay && hasFireAt) throw new Error('exactly one of delayMs/fireAt for once');
+    if (kind === 'once' && !hasDelay && !hasFireAt) throw new Error('once requires delayMs or fireAt');
+
+    if (hasDelay) {
+      if (def.delayMs < MIN_DELAY_MS) throw new Error(`delayMs must be ≥ ${MIN_DELAY_MS}`);
+      if (def.delayMs > MAX_DELAY_MS) throw new Error(`delayMs must be ≤ ${MAX_DELAY_MS}`);
+    }
+
+    const now = this.clock.now();
+    if (hasFireAt && def.fireAt <= now) throw new Error('fireAt must be in the future');
+
+    const id = crypto.randomUUID();
+    const nextFireAt = hasFireAt ? def.fireAt : now + def.delayMs;
+    const s = {
+      id, sessionId, command, kind,
+      delayMs: hasDelay ? def.delayMs : undefined,
+      fireAt: hasFireAt ? def.fireAt : undefined,
+      nextFireAt,
+      createdAt: now,
+    };
+    this._schedules[id] = s;
+    this._scheduleSave();
+    return s;
+  }
+
+  delete(scheduleId) {
+    if (!this._schedules[scheduleId]) return false;
+    const timer = this._timers[scheduleId];
+    if (timer) {
+      this.schedule.cancel(timer);
+      delete this._timers[scheduleId];
+    }
+    delete this._schedules[scheduleId];
+    this._scheduleSave();
+    return true;
+  }
+
+  listActive(sessionId) {
+    return Object.values(this._schedules)
+      .filter(s => s.sessionId === sessionId)
+      .sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  listHistory(sessionId) {
+    const rows = this._history[sessionId] || [];
+    // Stored newest-last; return newest-first
+    return [...rows].reverse();
+  }
+
+  clearHistory(sessionId) {
+    delete this._history[sessionId];
+    this._scheduleSave();
+  }
+}
+
+module.exports = { Scheduler, MIN_DELAY_MS, MAX_DELAY_MS, MAX_COMMAND_BYTES, HISTORY_CAP_PER_SESSION };
