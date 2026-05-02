@@ -8884,6 +8884,8 @@ class CWMApp {
     // Fetch all session costs in a single batch request (non-blocking)
     this._fetchSessionCostsAsync();
 
+    // Re-apply schedule indicators since renderWorkspaces() rewrote the tree.
+    if (this._scheduleCounts) this.applyScheduleIndicators();
 
     this.els.workspaceCount.textContent = `${workspaces.length} project${workspaces.length !== 1 ? 's' : ''}`;
   }
@@ -9171,7 +9173,7 @@ class CWMApp {
             titleClock = document.createElement('span');
             titleClock.className = 'pane-title-clock';
             titleClock.title = 'Has scheduled messages';
-            titleClock.innerHTML = '<svg width="12" height="12"><use href="#icon-clock"/></svg>';
+            titleClock.innerHTML = '<svg width="13" height="13"><use href="#icon-clock"/></svg>';
             titleEl.appendChild(titleClock);
           }
         } else if (titleClock) {
@@ -9180,14 +9182,20 @@ class CWMApp {
       }
     }
 
-    // Sidebar session items. .session-name uses ellipsis overflow, so a
-    // trailing icon would get clipped. Prepend it so it's always visible.
-    const list = this.els && this.els.sessionList;
-    if (list) {
-      list.querySelectorAll('.session-item[data-id]').forEach(item => {
-        const sid = item.dataset.id;
+    // Sidebar items live in two lists with different DOM shapes:
+    //   .session-item[data-id]            (all-sessions list, .session-name child)
+    //   .ws-session-item[data-session-id] (per-workspace tree, .ws-session-name child)
+    // Names use ellipsis overflow, so the icon gets prepended (not appended).
+    const sidebarTargets = [
+      { itemSel: '.session-item[data-id]',           idAttr: 'id',        nameSel: '.session-name' },
+      { itemSel: '.ws-session-item[data-session-id]', idAttr: 'sessionId', nameSel: '.ws-session-name' },
+    ];
+    for (const { itemSel, idAttr, nameSel } of sidebarTargets) {
+      document.querySelectorAll(itemSel).forEach(item => {
+        const sid = item.dataset[idAttr];
+        if (!sid) return;
         const n = counts[sid] || 0;
-        const nameEl = item.querySelector('.session-name');
+        const nameEl = item.querySelector(nameSel);
         if (!nameEl) return;
         let icon = nameEl.querySelector('.session-schedule-clock');
         if (n > 0) {
