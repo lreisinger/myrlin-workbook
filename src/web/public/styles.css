@@ -10046,6 +10046,8 @@ html {
 .schedule-form label { font-size: 11px; color: var(--subtext1); }
 .schedule-form input[type="text"],
 .schedule-form input[type="number"],
+.schedule-form input[type="date"],
+.schedule-form input[type="time"],
 .schedule-form input[type="datetime-local"],
 .schedule-form select {
   width: 100%; padding: 6px 8px;
