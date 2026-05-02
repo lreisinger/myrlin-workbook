@@ -121,6 +121,10 @@
     },
 
     _renderActive() {
+      // Pre-fill the date with today's local date; leave time empty so the
+      // user has to pick it deliberately (datetime-local can't hold a date-only value).
+      const now = new Date();
+      const todayLocal = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       return `
         <form class="schedule-form" data-form>
           <label>Message
@@ -139,7 +143,8 @@
           </div>
           <div class="row">
             <label><input type="radio" name="when" value="at" /> at</label>
-            <input type="datetime-local" name="fireAt" />
+            <input type="date" name="fireDate" value="${todayLocal}" />
+            <input type="time" name="fireTime" />
           </div>
           <label class="row">
             <input type="checkbox" name="repeat" />
@@ -191,9 +196,11 @@
           if (!Number.isFinite(ms) || ms < 1000) { errorEl.textContent = 'Delay must be at least 1 second'; return; }
           payload = { command, kind: repeat ? 'recurring' : 'once', delayMs: ms };
         } else {
-          const ts = fd.get('fireAt');
-          if (!ts) { errorEl.textContent = 'Pick a date/time'; return; }
-          const fireAt = new Date(ts).getTime();
+          const date = (fd.get('fireDate') || '').toString();
+          const time = (fd.get('fireTime') || '').toString();
+          if (!date) { errorEl.textContent = 'Pick a date'; return; }
+          if (!time) { errorEl.textContent = 'Pick a time'; return; }
+          const fireAt = new Date(`${date}T${time}`).getTime();
           if (!Number.isFinite(fireAt)) { errorEl.textContent = 'Invalid date/time'; return; }
           payload = { command, kind: 'once', fireAt };
         }
