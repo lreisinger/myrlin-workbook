@@ -1364,6 +1364,10 @@ textarea.input {
   color: var(--mauve) !important;
 }
 
+.vkb-toggle-btn .vkb-slash { display: none; }
+.vkb-toggle-btn.active { color: var(--mauve) !important; }
+.vkb-toggle-btn.active .vkb-slash { display: inline; }
+
 
 /* ─── Main Content ──────────────────────────────────────────── */
 
