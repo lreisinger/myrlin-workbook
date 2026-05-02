@@ -5037,7 +5037,7 @@ class CWMApp {
     panel._wsId = ws.id;
 
     panel.replaceChildren();
-    const container = document.createElement('div');
+    container = document.createElement('div');
     container.className = 'files-container';
 
     const sidebar = document.createElement('div');
@@ -5379,7 +5379,7 @@ class CWMApp {
 
       panel.textContent = '';
 
-      const container = document.createElement('div');
+      container = document.createElement('div');
       container.className = 'git-panel-container';
 
       const left = document.createElement('div');
