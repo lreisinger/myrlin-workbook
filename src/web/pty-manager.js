@@ -117,6 +117,105 @@ function cwdFromJsonl(sessionId) {
 const MAX_SCROLLBACK_CHARS = 100 * 1024; // 100KB
 
 /**
+ * Watch one or more directories for the appearance of a *.jsonl file that is
+ * not in the pre-call snapshot. Emits exactly one result.
+ *
+ * Hybrid strategy:
+ *   1. fs.watch is registered on each candidate dir that exists at call time.
+ *      'rename' events for new .jsonl files resolve immediately.
+ *   2. At t+timeoutMs, a final rescan diffs the live directory listing against
+ *      the snapshot and picks the freshest by birthtime/mtime. Catches macOS
+ *      FSEvents drops and the cold-start case where the candidate dir didn't
+ *      exist when fs.watch was first attempted.
+ *   3. cleanup() is idempotent and runs on match, timeout, or explicit cancel.
+ *
+ * @param {object} opts
+ * @param {() => string[]} opts.candidateDirsFn - returns relative dir names
+ *   under claudeProjectsDir. Re-evaluated at rescan time.
+ * @param {Set<string>} opts.snapshot - "<dirName>/<file>" keys to ignore.
+ * @param {number} opts.timeoutMs - final-rescan deadline.
+ * @param {string} opts.claudeProjectsDir - absolute path resolving relative
+ *   names from candidateDirsFn.
+ * @param {(err: Error|null, hit: {dirName: string, file: string, bornAt: number}|null) => void} onResult
+ * @returns {() => void} cancel function (idempotent)
+ */
+function waitForNewJsonl({ candidateDirsFn, snapshot, timeoutMs, claudeProjectsDir }, onResult) {
+  let done = false;
+  const watchers = [];
+  let timer = null;
+
+  const cleanup = () => {
+    if (done) return;
+    done = true;
+    if (timer) { clearTimeout(timer); timer = null; }
+    while (watchers.length) {
+      const w = watchers.pop();
+      try { w.close(); } catch (_) {}
+    }
+  };
+
+  const resolve = (err, hit) => {
+    if (done) return;
+    cleanup();
+    try { onResult(err, hit); } catch (_) {}
+  };
+
+  const tryAcceptFile = (dirName, file) => {
+    if (!file || !file.endsWith('.jsonl')) return false;
+    if (snapshot.has(dirName + '/' + file)) return false;
+    let stat;
+    try { stat = fs.statSync(path.join(claudeProjectsDir, dirName, file)); } catch (_) { return false; }
+    const bornAt = stat.birthtimeMs || stat.mtimeMs;
+    resolve(null, { dirName, file, bornAt });
+    return true;
+  };
+
+  // Register watchers on each candidate dir that exists at call time. Failures
+  // (EMFILE / ENOSPC / ENOENT) silently fall through to the timeout rescan,
+  // which is exactly today's contract.
+  for (const dirName of candidateDirsFn()) {
+    try {
+      const watcher = fs.watch(path.join(claudeProjectsDir, dirName), (event, file) => {
+        if (done || event !== 'rename') return;
+        tryAcceptFile(dirName, file);
+      });
+      if (typeof watcher.on === 'function') {
+        watcher.on('error', () => { /* swallow; rescan will catch */ });
+      }
+      watchers.push(watcher);
+    } catch (_) {
+      // Fall through to rescan
+    }
+  }
+
+  // Final-rescan deadline. Also handles the cold-start case where no
+  // candidate dir existed at call time (the dir gets created during the wait).
+  timer = setTimeout(() => {
+    if (done) return;
+    const fresh = [];
+    for (const dirName of candidateDirsFn()) {
+      let entries;
+      try { entries = fs.readdirSync(path.join(claudeProjectsDir, dirName)); } catch (_) { continue; }
+      for (const f of entries) {
+        if (!f.endsWith('.jsonl')) continue;
+        if (snapshot.has(dirName + '/' + f)) continue;
+        let stat;
+        try { stat = fs.statSync(path.join(claudeProjectsDir, dirName, f)); } catch (_) { continue; }
+        fresh.push({ dirName, file: f, bornAt: stat.birthtimeMs || stat.mtimeMs });
+      }
+    }
+    if (fresh.length === 0) {
+      resolve(null, null);
+      return;
+    }
+    fresh.sort((a, b) => b.bornAt - a.bornAt);
+    resolve(null, fresh[0]);
+  }, timeoutMs);
+
+  return cleanup;
+}
+
+/**
  * Represents a single PTY session with its process, clients, and scrollback.
  */
 class PtySession {
@@ -458,14 +557,13 @@ class PtySessionManager {
 
     console.log(`[PTY] Spawned session ${sessionId} (PID: ${ptyProcess.pid}) cmd: "${fullCommand}" cwd: "${cwd || process.cwd()}"`);
 
-    // ── Async: detect Claude session UUID from newest JSONL after spawn ──
+    // ── Async: detect Claude session UUID from new JSONL after spawn ──
     // Claude Code creates a JSONL file in ~/.claude/projects/<encoded-cwd>/<uuid>.jsonl.
-    // We snapshot the set of existing JSONLs synchronously at spawn time and,
-    // after a short delay, only accept files that did NOT exist pre-spawn.
-    // Without this, any unrelated Claude activity in the same cwd (another
-    // Myrlin session, or a bare `claude` invocation) can bump an older
-    // JSONL's mtime past ours, and we would silently bind this session to
-    // someone else's transcript.
+    // We snapshot the set of existing JSONLs synchronously at spawn time and
+    // hand off to waitForNewJsonl, which fires on fs.watch events and falls
+    // back to a final rescan at t+8s. Snapshot diff prevents binding to a
+    // pre-existing transcript whose mtime drifted; fs.watch makes the binding
+    // sub-second on the happy path.
     if (resolvedCwd && !resumeSessionId) {
       const claudeDir = path.join(os.homedir(), '.claude', 'projects');
       const findCandidateDirs = () => {
@@ -491,46 +589,20 @@ class PtySessionManager {
       const preSnapshot = new Set();
       for (const dirName of findCandidateDirs()) {
         try {
-          const projDir = path.join(claudeDir, dirName);
-          for (const f of fs.readdirSync(projDir)) {
+          for (const f of fs.readdirSync(path.join(claudeDir, dirName))) {
             if (f.endsWith('.jsonl')) preSnapshot.add(dirName + '/' + f);
           }
         } catch (_) {}
       }
 
-      setTimeout(() => {
-        try {
-          const candidates = findCandidateDirs();
-          if (candidates.length === 0) return;
-
-          // Collect only JSONLs that were NOT in the pre-spawn snapshot.
-          // Pre-existing files (whose mtimes may have drifted) are ignored.
-          const fresh = [];
-          for (const dirName of candidates) {
-            const projDir = path.join(claudeDir, dirName);
-            let entries;
-            try { entries = fs.readdirSync(projDir); } catch (_) { continue; }
-            for (const f of entries) {
-              if (!f.endsWith('.jsonl')) continue;
-              if (preSnapshot.has(dirName + '/' + f)) continue;
-              let stat;
-              try { stat = fs.statSync(path.join(projDir, f)); } catch (_) { continue; }
-              // Prefer birthtime (true creation time) when available — that
-              // is the right semantic for "which JSONL did this PTY produce."
-              // Fall back to mtime on filesystems that don't track birthtime
-              // reliably (some older Linux/btrfs/zfs return 0 or mtime).
-              const bornAt = stat.birthtimeMs || stat.mtimeMs;
-              fresh.push({ dirName, name: f, bornAt });
-            }
-          }
-
-          if (fresh.length === 0) {
+      const cancelWatch = waitForNewJsonl(
+        { candidateDirsFn: findCandidateDirs, snapshot: preSnapshot, timeoutMs: 8000, claudeProjectsDir: claudeDir },
+        (err, hit) => {
+          if (err || !hit) {
             console.log(`[PTY] No new JSONL appeared for ${sessionId}; skipping resumeSessionId backfill`);
             return;
           }
-
-          fresh.sort((a, b) => b.bornAt - a.bornAt);
-          const uuid = fresh[0].name.replace('.jsonl', '');
+          const uuid = hit.file.replace('.jsonl', '');
           console.log(`[PTY] Detected Claude session UUID for ${sessionId}: ${uuid}`);
 
           // Save to store so future restarts use --resume <uuid>.
@@ -569,10 +641,9 @@ class PtySessionManager {
               if (ws.readyState === 1) ws.send(backfillMsg);
             } catch (_) {}
           }
-        } catch (err) {
-          console.log(`[PTY] UUID detection failed for ${sessionId}: ${err.message}`);
         }
-      }, 8000); // Wait 8s for Claude to create the JSONL file
+      );
+      session._cancelWatch = cancelWatch;
     }
 
     return session;
@@ -755,6 +826,12 @@ class PtySessionManager {
       session.pingInterval = null;
     }
 
+    // Cancel any in-flight JSONL watcher (idempotent if it already resolved)
+    if (typeof session._cancelWatch === 'function') {
+      try { session._cancelWatch(); } catch (_) {}
+      session._cancelWatch = null;
+    }
+
     // Kill the PTY process
     if (session.alive) {
       try {
@@ -863,4 +940,4 @@ class PtySessionManager {
   }
 }
 
-module.exports = { PtySessionManager };
+module.exports = { PtySessionManager, __test: { waitForNewJsonl } };
