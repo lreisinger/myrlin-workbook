@@ -129,6 +129,7 @@ class CWMApp {
         autoOpenTerminal: true,
         autoTrustDialogs: false,
         maxConcurrentTasks: 4,
+        headerHeight: 80,
         defaultModelPlanning: '',
         defaultModelRunning: '',
       }, JSON.parse(localStorage.getItem('cwm_settings') || '{}')),
@@ -3681,6 +3682,7 @@ class CWMApp {
       { key: 'sessionCountInHeader', label: 'Session Count in Header', description: 'Show running/total session stats in the header bar', category: 'Interface' },
       { key: 'confirmBeforeClose', label: 'Confirm Before Close', description: 'Ask for confirmation before closing terminal panes', category: 'Interface' },
       { key: 'uiScale', label: 'UI Scale', description: 'Adjust the overall interface size', category: 'Interface', type: 'scale' },
+      { key: 'headerHeight', label: 'Header Height', description: 'Adjust the height of the top header bar', category: 'Interface', type: 'slider', min: 35, max: 80, default: 80, unit: 'px' },
       { key: 'autoTrustDialogs', label: 'Auto-accept Trust Dialogs', description: 'Automatically accept safe trust/permission prompts in terminals. Dangerous prompts (delete, credentials) are never auto-accepted.', category: 'Automation' },
       { key: 'enableWorktreeTasks', label: 'Worktree Tasks', description: 'Enable automated worktree task creation and review workflow', category: 'Advanced' },
       { key: 'enableTd', label: 'td Task Management', description: 'Show td issue tracking integration (github.com/marcus/td). When disabled, hides all td UI including the docs panel section and sidebar toggle.', category: 'Advanced' },
@@ -4207,6 +4209,21 @@ class CWMApp {
                 <button class="settings-scale-btn" data-scale-dir="up" title="Increase">+</button>
               </div>
             </div>`;
+        } else if (item.type === 'slider') {
+          const val = this.state.settings[item.key] !== undefined ? this.state.settings[item.key] : (item.default || 0);
+          const min = item.min !== undefined ? item.min : 0;
+          const max = item.max !== undefined ? item.max : 100;
+          html += `
+            <div class="settings-row" data-setting-key="${item.key}">
+              <div class="settings-row-info">
+                <div class="settings-row-label">${this.escapeHtml(item.label)}</div>
+                <div class="settings-row-desc">${this.escapeHtml(item.description)}</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px;">
+                <input type="range" class="settings-slider-input" data-setting-slider="${item.key}" value="${val}" min="${min}" max="${max}" style="width: 100px;" />
+                <span class="settings-slider-value" id="slider-val-${item.key}" style="font-size:12px;min-width:35px;text-align:right;">${val}${item.unit || ''}</span>
+              </div>
+            </div>`;
         } else if (item.type === 'number') {
           const val = this.state.settings[item.key] || 0;
           html += `
@@ -4462,6 +4479,26 @@ class CWMApp {
       });
     });
 
+    // Bind slider input change events
+    this.els.settingsBody.querySelectorAll('input[data-setting-slider]').forEach(input => {
+      input.addEventListener('input', (e) => {
+        const key = e.target.dataset.settingSlider;
+        const val = parseInt(e.target.value, 10) || 0;
+        this.state.settings[key] = val;
+        
+        const registryItem = this.getSettingsRegistry().find(r => r.key === key);
+        const unit = registryItem?.unit || '';
+        
+        const valSpan = document.getElementById(`slider-val-${key}`);
+        if (valSpan) valSpan.textContent = val + unit;
+
+        this.applySettings(); // Apply immediately for preview
+      });
+      input.addEventListener('change', (e) => {
+        this.saveSettings(); // Save only when sliding stops
+      });
+    });
+
     // Bind number input change events
     this.els.settingsBody.querySelectorAll('input[data-setting-num]').forEach(input => {
       input.addEventListener('change', (e) => {
@@ -4536,6 +4573,11 @@ class CWMApp {
   /** Apply current settings to the UI (CSS classes, visibility toggles) */
   applySettings() {
     const html = document.documentElement;
+
+    // Header height
+    if (this.state.settings.headerHeight !== undefined) {
+      html.style.setProperty('--header-height', `${this.state.settings.headerHeight}px`);
+    }
 
     // Pane color highlights
     html.classList.toggle('pane-colors-enabled', !!this.state.settings.paneColorHighlights);
