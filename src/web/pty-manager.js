@@ -195,32 +195,19 @@ class PtySessionManager {
     let fullCommand = command;
     if (resumeSessionId) {
       fullCommand += ' --resume ' + resumeSessionId;
-    } else if (cwd && !newSession) {
-      // Only add --continue when there is actually conversation history for this
-      // working directory. `claude --continue` exits with code 1 ("No conversation
-      // found to continue") on a fresh directory — e.g. a brand-new git worktree.
-      // Scan ~/.claude/projects/ for any JSONL file whose encoded path matches cwd.
-      let hasHistory = false;
-      try {
-        const claudeDir = path.join(os.homedir(), '.claude', 'projects');
-        if (fs.existsSync(claudeDir)) {
-          const normalizedCwd = cwd.replace(/[/\\]/g, path.sep);
-          const match = fs.readdirSync(claudeDir).find(d => {
-            try {
-              return decodeURIComponent(d).replace(/[/\\]/g, path.sep) === normalizedCwd;
-            } catch (_) { return false; }
-          });
-          if (match) {
-            const projDir = path.join(claudeDir, match);
-            hasHistory = fs.readdirSync(projDir).some(f => f.endsWith('.jsonl'));
-          }
-        }
-      } catch (_) { /* filesystem error — fall through, don't add --continue */ }
-      if (hasHistory) {
-        fullCommand += ' --continue';
-      }
-      // If no history, run bare `claude` — starts a fresh session without error.
     }
+    // Otherwise run bare `claude` — start a fresh transcript.
+    //
+    // Auto-`--continue` was previously added whenever the cwd had any prior
+    // Claude history. That silently bound a brand-new Myrlin session to
+    // whichever transcript was most recent in that directory — frequently a
+    // different Myrlin session's, or one from running `claude` directly. The
+    // post-spawn UUID detector then persisted the wrong UUID as resumeSessionId
+    // and the misbinding became permanent.
+    //
+    // Resume is now driven strictly by an explicit resumeSessionId. To
+    // continue a past transcript, use the project panel's "Open in Terminal"
+    // (which sets resumeSessionId), or attach the session via Discover.
     if (bypassPermissions) {
       fullCommand += ' --dangerously-skip-permissions';
     }
