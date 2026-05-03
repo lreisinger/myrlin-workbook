@@ -384,10 +384,18 @@ class TerminalPane {
           return false;
         }
 
-        // Shift+Enter: send newline instead of carriage return
+        // Shift+Enter: send ESC+CR — Anthropic's documented "newline in input"
+        // sequence. Plain \n didn't work because Ink-based TUIs (Claude Code)
+        // treat both \n and \r as submit; \x1b\r is interpreted as "newline,
+        // not submit". Matches the keybinding recipe shipped by /terminal-setup.
+        // preventDefault is required: returning false only stops xterm from
+        // handling the key but does NOT prevent the browser from inserting a
+        // newline into the hidden textarea, which then fires onData with \r
+        // and submits — same pattern as the Ctrl+V handler above.
         if (e.key === 'Enter' && e.shiftKey) {
+          e.preventDefault();
           if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({ type: 'input', data: '\n' }));
+            this.ws.send(JSON.stringify({ type: 'input', data: '\x1b\r' }));
           }
           return false;
         }
