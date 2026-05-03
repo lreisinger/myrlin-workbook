@@ -528,14 +528,30 @@ class PtySessionManager {
           const uuid = fresh[0].name.replace('.jsonl', '');
           console.log(`[PTY] Detected Claude session UUID for ${sessionId}: ${uuid}`);
 
-          // Save to store so future restarts use --resume <uuid>
+          // Save to store so future restarts use --resume <uuid>.
+          // Defensive: refuse to backfill if another Myrlin session already
+          // owns this UUID. That shouldn't be possible now that the snapshot
+          // diff filters pre-existing JSONLs, but the check is cheap and
+          // prevents two sessions from ever pointing at the same transcript.
+          let backfilled = false;
           try {
             const store = getStore();
-            if (store.getSession(sessionId)) {
+            const conflict = store.getAllSessionsList().find(s =>
+              s.id !== sessionId && s.resumeSessionId === uuid
+            );
+            if (conflict) {
+              console.warn(
+                `[PTY] Refusing to backfill resumeSessionId=${uuid} for session ${sessionId}: ` +
+                `already owned by session ${conflict.id} ("${conflict.name || ''}")`
+              );
+            } else if (store.getSession(sessionId)) {
               store.updateSession(sessionId, { resumeSessionId: uuid });
               console.log(`[PTY] Backfilled resumeSessionId=${uuid} for session ${sessionId}`);
+              backfilled = true;
             }
           } catch (_) {}
+
+          if (!backfilled) return;
 
           // Also store on the session object for layout saves
           session.detectedResumeId = uuid;
