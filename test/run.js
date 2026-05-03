@@ -802,4 +802,23 @@ console.log('  ' + '─'.repeat(42) + '\n');
 // Restore production state files that were saved before tests
 restoreState();
 
-process.exit(failed > 0 ? 1 : 0);
+// Run standalone test files (each has its own runner). Pass results count
+// through to the final exit code so CI catches failures in any of them.
+const { spawnSync } = require('child_process');
+const standaloneTests = [
+  'pty-watcher.test.js',
+  'scheduler.test.js',
+  'scheduler-api.test.js',
+];
+
+let standaloneFailed = 0;
+for (const file of standaloneTests) {
+  const filePath = path.join(__dirname, file);
+  if (!require('fs').existsSync(filePath)) continue;
+  console.log(`\n  \x1b[1m\x1b[36m  Running ${file}\x1b[0m`);
+  console.log('  ' + '─'.repeat(42));
+  const result = spawnSync(process.execPath, [filePath], { stdio: 'inherit' });
+  if (result.status !== 0) standaloneFailed++;
+}
+
+process.exit(failed > 0 || standaloneFailed > 0 ? 1 : 0);

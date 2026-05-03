@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.33] - 2026-05-03
+
+### Added
+
+- **Scheduled messages** - Server-side scheduler with per-pane popover for queuing shell commands to fire into a Claude session later. Supports once-after-delay, absolute time, and recurring intervals. Persists to `~/.myrlin/schedules.json` with atomic writes. Boot recovery skips missed once-shots and advances recurring schedules without catch-up. Skip handling when PTY is stopped, with consecutive-skip collapse and 50-row history cap. Floating clock button per pane with Active/History tabs. 32 new tests across two files. (PR #55 by @lreisinger)
+- **Header Height slider** - 35-80px range slider in Settings > Interface for live header bar resizing. Introduces a reusable `slider` setting type with configurable min/max/unit suffix. (PR #57 by @lreisinger)
+
+### Fixed
+
+- **Sessions binding to wrong Claude transcript** - Critical correctness fix. Bare spawns auto-added `claude --continue` whenever the cwd had any prior `.jsonl`, so a new Myrlin session in a busy directory resumed whichever transcript Claude considered most recent (often a sibling session's). Post-spawn detector picked the newest-mtime JSONL with no ownership check, so the wrong UUID stuck permanently. Now: drops `--continue` entirely (resume only via explicit `resumeSessionId`), uses pre-spawn JSONL snapshot + birthtime-aware hybrid `fs.watch`+rescan detector, refuses to backfill UUIDs already owned by another session, renames the misnamed `name` field to `claudeSessionId`. 6 new async watcher tests. (PR #58 by @lreisinger)
+- **Shift+Enter submitting instead of inserting newline** - Sent `\n` which Ink-based TUIs (Claude Code) treat as submit. Now sends `\x1b\r` (ESC+CR) per Anthropic's `/terminal-setup` recipe, plus calls `e.preventDefault()` so the browser doesn't bypass the custom handler via xterm's hidden textarea. (PR #56 by @lreisinger)
+
+### Internal
+
+- **Test runner integration** - `npm test` now runs the standalone test files (`pty-watcher.test.js`, `scheduler.test.js`, `scheduler-api.test.js`) after the main suite, so CI catches failures in any of them. Total: 96 tests across 4 files.
+
 ## [0.9.32] - 2026-05-02
 
 ### Added
