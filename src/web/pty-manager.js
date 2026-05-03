@@ -515,7 +515,12 @@ class PtySessionManager {
               if (preSnapshot.has(dirName + '/' + f)) continue;
               let stat;
               try { stat = fs.statSync(path.join(projDir, f)); } catch (_) { continue; }
-              fresh.push({ dirName, name: f, mtime: stat.mtimeMs });
+              // Prefer birthtime (true creation time) when available — that
+              // is the right semantic for "which JSONL did this PTY produce."
+              // Fall back to mtime on filesystems that don't track birthtime
+              // reliably (some older Linux/btrfs/zfs return 0 or mtime).
+              const bornAt = stat.birthtimeMs || stat.mtimeMs;
+              fresh.push({ dirName, name: f, bornAt });
             }
           }
 
@@ -524,7 +529,7 @@ class PtySessionManager {
             return;
           }
 
-          fresh.sort((a, b) => b.mtime - a.mtime);
+          fresh.sort((a, b) => b.bornAt - a.bornAt);
           const uuid = fresh[0].name.replace('.jsonl', '');
           console.log(`[PTY] Detected Claude session UUID for ${sessionId}: ${uuid}`);
 
