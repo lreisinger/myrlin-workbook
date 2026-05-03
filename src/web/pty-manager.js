@@ -473,17 +473,18 @@ class PtySessionManager {
 
     // ── Async: detect Claude session UUID from newest JSONL after spawn ──
     // Claude Code creates a JSONL file in ~/.claude/projects/<encoded-cwd>/<uuid>.jsonl.
-    // After a short delay, scan for the newest file and backfill resumeSessionId
-    // so future restarts use the precise --resume <uuid> instead of --continue.
+    // We snapshot the set of existing JSONLs synchronously at spawn time and,
+    // after a short delay, only accept files that did NOT exist pre-spawn.
+    // Without this, any unrelated Claude activity in the same cwd (another
+    // Myrlin session, or a bare `claude` invocation) can bump an older
+    // JSONL's mtime past ours, and we would silently bind this session to
+    // someone else's transcript.
     if (resolvedCwd && !resumeSessionId) {
-      setTimeout(() => {
+      const claudeDir = path.join(os.homedir(), '.claude', 'projects');
+      const findCandidateDirs = () => {
         try {
-          const claudeDir = path.join(os.homedir(), '.claude', 'projects');
-          if (!fs.existsSync(claudeDir)) return;
-
-          // Claude encodes the cwd path as a directory name under ~/.claude/projects/
-          // Try multiple encoding patterns: URL-encoded, slash-replaced
-          const candidates = fs.readdirSync(claudeDir).filter(d => {
+          if (!fs.existsSync(claudeDir)) return [];
+          return fs.readdirSync(claudeDir).filter(d => {
             try {
               const decoded = decodeURIComponent(d);
               const normalizedDecoded = decoded.replace(/[/\\]/g, path.sep);
@@ -493,25 +494,51 @@ class PtySessionManager {
               return false;
             }
           });
+        } catch (_) {
+          return [];
+        }
+      };
 
+      // Pre-spawn snapshot of JSONLs that already existed in candidate dirs.
+      // Keys are "<dirName>/<file>" so identical UUIDs in sibling dirs stay distinct.
+      const preSnapshot = new Set();
+      for (const dirName of findCandidateDirs()) {
+        try {
+          const projDir = path.join(claudeDir, dirName);
+          for (const f of fs.readdirSync(projDir)) {
+            if (f.endsWith('.jsonl')) preSnapshot.add(dirName + '/' + f);
+          }
+        } catch (_) {}
+      }
+
+      setTimeout(() => {
+        try {
+          const candidates = findCandidateDirs();
           if (candidates.length === 0) return;
 
-          const projDir = path.join(claudeDir, candidates[0]);
-          const jsonls = fs.readdirSync(projDir)
-            .filter(f => f.endsWith('.jsonl'))
-            .map(f => {
-              try {
-                return { name: f, mtime: fs.statSync(path.join(projDir, f)).mtimeMs };
-              } catch (_) {
-                return null;
-              }
-            })
-            .filter(Boolean)
-            .sort((a, b) => b.mtime - a.mtime);
+          // Collect only JSONLs that were NOT in the pre-spawn snapshot.
+          // Pre-existing files (whose mtimes may have drifted) are ignored.
+          const fresh = [];
+          for (const dirName of candidates) {
+            const projDir = path.join(claudeDir, dirName);
+            let entries;
+            try { entries = fs.readdirSync(projDir); } catch (_) { continue; }
+            for (const f of entries) {
+              if (!f.endsWith('.jsonl')) continue;
+              if (preSnapshot.has(dirName + '/' + f)) continue;
+              let stat;
+              try { stat = fs.statSync(path.join(projDir, f)); } catch (_) { continue; }
+              fresh.push({ dirName, name: f, mtime: stat.mtimeMs });
+            }
+          }
 
-          if (jsonls.length === 0) return;
+          if (fresh.length === 0) {
+            console.log(`[PTY] No new JSONL appeared for ${sessionId}; skipping resumeSessionId backfill`);
+            return;
+          }
 
-          const uuid = jsonls[0].name.replace('.jsonl', '');
+          fresh.sort((a, b) => b.mtime - a.mtime);
+          const uuid = fresh[0].name.replace('.jsonl', '');
           console.log(`[PTY] Detected Claude session UUID for ${sessionId}: ${uuid}`);
 
           // Save to store so future restarts use --resume <uuid>
