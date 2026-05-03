@@ -1886,6 +1886,7 @@ class CWMApp {
     this.connectSSE();
     this.startConflictChecks();
     this.checkForUpdates();
+    this.startSchedulePolling();
   }
 
   async init() {
@@ -8998,6 +8999,8 @@ class CWMApp {
     // Fetch all session costs in a single batch request (non-blocking)
     this._fetchSessionCostsAsync();
 
+    // Re-apply schedule indicators since renderWorkspaces() rewrote the tree.
+    if (this._scheduleCounts) this.applyScheduleIndicators();
 
     this.els.workspaceCount.textContent = `${workspaces.length} project${workspaces.length !== 1 ? 's' : ''}`;
   }
@@ -9228,6 +9231,105 @@ class CWMApp {
     this._renderContextItems(group.name, items, x, y);
   }
 
+  /**
+   * Poll /api/schedules/summary every 10 s and apply active-schedule
+   * indicators to pane badges, pane titles, and sidebar session items.
+   * Refreshes on the same cadence as the existing per-pane git poller.
+   */
+  startSchedulePolling() {
+    if (this._scheduleSummaryInterval) return;
+    this._scheduleCounts = {};
+    this.refreshScheduleIndicators();
+    this._scheduleSummaryInterval = setInterval(() => this.refreshScheduleIndicators(), 10_000);
+  }
+
+  async refreshScheduleIndicators() {
+    if (!this.state || !this.state.token) return;
+    try {
+      const r = await fetch('/api/schedules/summary', {
+        headers: { Authorization: 'Bearer ' + this.state.token },
+        credentials: 'same-origin',
+      });
+      if (!r.ok) return;
+      const data = await r.json();
+      this._scheduleCounts = (data && data.counts) || {};
+      this.applyScheduleIndicators();
+    } catch (_) { /* network blip — try again next tick */ }
+  }
+
+  applyScheduleIndicators() {
+    const counts = this._scheduleCounts || {};
+
+    // Pane badge + title-bar clock for each terminal pane
+    for (let i = 0; i < 6; i++) {
+      const paneEl = document.getElementById(`term-pane-${i}`);
+      if (!paneEl) continue;
+      const tp = this.terminalPanes[i];
+      const sid = tp ? tp.sessionId : null;
+      const n = sid ? (counts[sid] || 0) : 0;
+
+      // Floating clock button badge (number)
+      const btn = paneEl.querySelector('.terminal-pane-schedule');
+      if (btn) {
+        const badge = btn.querySelector('.pane-schedule-count');
+        if (badge) {
+          badge.textContent = n > 0 ? String(n) : '';
+          badge.hidden = !(n > 0);
+        }
+      }
+
+      // Inline clock icon inside the title span (right after the text) so it
+      // sits flush against the title without being pushed by header flex gap.
+      const titleEl = paneEl.querySelector('.terminal-pane-title');
+      if (titleEl) {
+        let titleClock = titleEl.querySelector('.pane-title-clock');
+        if (n > 0) {
+          if (!titleClock) {
+            titleClock = document.createElement('span');
+            titleClock.className = 'pane-title-clock';
+            titleClock.title = 'Has scheduled messages';
+            titleClock.innerHTML = '<svg width="13" height="13"><use href="#icon-clock"/></svg>';
+            titleEl.appendChild(titleClock);
+          }
+        } else if (titleClock) {
+          titleClock.remove();
+        }
+      }
+    }
+
+    // Sidebar items live in two lists with different DOM shapes:
+    //   .session-item[data-id]            (all-sessions list, .session-name child)
+    //   .ws-session-item[data-session-id] (per-workspace tree, .ws-session-name child)
+    // Names use ellipsis overflow, so the icon gets prepended (not appended).
+    const sidebarTargets = [
+      { itemSel: '.session-item[data-id]',           idAttr: 'id',        nameSel: '.session-name' },
+      { itemSel: '.ws-session-item[data-session-id]', idAttr: 'sessionId', nameSel: '.ws-session-name' },
+    ];
+    for (const { itemSel, idAttr, nameSel } of sidebarTargets) {
+      document.querySelectorAll(itemSel).forEach(item => {
+        const sid = item.dataset[idAttr];
+        if (!sid) return;
+        const n = counts[sid] || 0;
+        const nameEl = item.querySelector(nameSel);
+        if (!nameEl) return;
+        let icon = nameEl.querySelector('.session-schedule-clock');
+        if (n > 0) {
+          if (!icon) {
+            icon = document.createElement('span');
+            icon.className = 'session-schedule-clock';
+            icon.title = `${n} scheduled message${n === 1 ? '' : 's'}`;
+            icon.innerHTML = '<svg width="11" height="11"><use href="#icon-clock"/></svg>';
+            nameEl.prepend(icon);
+          } else {
+            icon.title = `${n} scheduled message${n === 1 ? '' : 's'}`;
+          }
+        } else if (icon) {
+          icon.remove();
+        }
+      });
+    }
+  }
+
   renderSessions() {
     const list = this.els.sessionList;
     const sessions = this.state.sessions.filter(s => this.state.showHidden || !this.state.hiddenSessions.has(s.id));
@@ -9269,6 +9371,9 @@ class CWMApp {
         </div>`;
     }).join('');
 
+
+    // Re-apply schedule indicators since renderSessions() rewrites the list
+    if (this._scheduleCounts) this.applyScheduleIndicators();
 
     // Async: patch in git branch badges
     const sessionItems = list.querySelectorAll('.session-item[data-id]');
@@ -10221,6 +10326,17 @@ class CWMApp {
           });
         }
 
+        // Schedule clock button — opens the schedule popover for this pane's session
+        const scheduleBtn = pane.querySelector('.terminal-pane-schedule');
+        if (scheduleBtn) {
+          scheduleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const tp = this.terminalPanes[slotIdx];
+            if (!tp || !tp.sessionId) return;
+            if (window.SchedulePopover) window.SchedulePopover.toggle(scheduleBtn, tp.sessionId);
+          });
+        }
+
         // Pane view back button — restores terminal after a non-terminal view (E003)
         const backBtn = pane.querySelector('.pane-view-back');
         if (backBtn) {
@@ -10356,6 +10472,13 @@ class CWMApp {
     if (closeBtn) closeBtn.hidden = false;
     const uploadBtn2 = paneEl.querySelector('.terminal-pane-upload');
     if (uploadBtn2) uploadBtn2.hidden = false;
+    const scheduleBtn2 = paneEl.querySelector('.terminal-pane-schedule');
+    if (scheduleBtn2) {
+      scheduleBtn2.hidden = false;
+      // The 10 s schedule poller drives the badge; kick off an immediate
+      // refresh so a freshly-attached pane reflects current state right away.
+      if (this.refreshScheduleIndicators) this.refreshScheduleIndicators();
+    }
     // Show mic button if SpeechRecognition is supported
     const micBtn2 = paneEl.querySelector('.terminal-pane-mic');
     if (micBtn2 && this._speechRecognitionAvailable) micBtn2.hidden = false;
@@ -10382,11 +10505,17 @@ class CWMApp {
       this.terminalPanes[idx] = null;
       const deadPane = document.getElementById(`term-pane-${idx}`);
       if (deadPane) {
+        // Close the schedule popover if it was anchored to this pane.
+        if (window.SchedulePopover && window.SchedulePopover.anchor && deadPane.contains(window.SchedulePopover.anchor)) {
+          window.SchedulePopover.close();
+        }
         deadPane.classList.add('terminal-pane-empty');
         const header = deadPane.querySelector('.terminal-pane-title');
         if (header) header.textContent = 'Drop a session here';
         const closeBtn2 = deadPane.querySelector('.terminal-pane-close');
         if (closeBtn2) closeBtn2.hidden = true;
+        const scheduleBtn3 = deadPane.querySelector('.terminal-pane-schedule');
+        if (scheduleBtn3) scheduleBtn3.hidden = true;
       }
       this.updateTerminalGridLayout();
     };
@@ -10823,6 +10952,13 @@ class CWMApp {
   }
 
   closeTerminalPane(slotIdx) {
+    // If our schedule popover is anchored on this pane's clock, close it.
+    if (window.SchedulePopover && window.SchedulePopover.anchor) {
+      const paneElForPopover = document.getElementById(`term-pane-${slotIdx}`);
+      if (paneElForPopover && paneElForPopover.contains(window.SchedulePopover.anchor)) {
+        window.SchedulePopover.close();
+      }
+    }
     if (this._paneRefreshTimers[slotIdx]) {
       clearInterval(this._paneRefreshTimers[slotIdx]);
       delete this._paneRefreshTimers[slotIdx];
@@ -10849,6 +10985,12 @@ class CWMApp {
     if (closeBtn) closeBtn.hidden = true;
     const uploadBtn3 = paneEl.querySelector('.terminal-pane-upload');
     if (uploadBtn3) uploadBtn3.hidden = true;
+    const scheduleBtn3 = paneEl.querySelector('.terminal-pane-schedule');
+    if (scheduleBtn3) {
+      scheduleBtn3.hidden = true;
+      const badge = scheduleBtn3.querySelector('.pane-schedule-count');
+      if (badge) { badge.textContent = ''; badge.hidden = true; }
+    }
     // Collapse any active expansion before closing
     this._collapseExpandPane(slotIdx);
     const expandBtn3 = paneEl.querySelector('.terminal-pane-expand');
@@ -11163,6 +11305,7 @@ class CWMApp {
       const titleEl = paneEl ? paneEl.querySelector('.terminal-pane-title') : null;
       const closeBtn = paneEl ? paneEl.querySelector('.terminal-pane-close') : null;
       const uploadBtnEl = paneEl ? paneEl.querySelector('.terminal-pane-upload') : null;
+      const scheduleBtnEl = paneEl ? paneEl.querySelector('.terminal-pane-schedule') : null;
       const micBtnEl = paneEl ? paneEl.querySelector('.terminal-pane-mic') : null;
       if (!paneEl) return;
 
@@ -11173,6 +11316,7 @@ class CWMApp {
         if (titleEl) titleEl.textContent = tp.sessionName || tp.sessionId;
         if (closeBtn) closeBtn.hidden = false;
         if (uploadBtnEl) uploadBtnEl.hidden = false;
+        if (scheduleBtnEl) scheduleBtnEl.hidden = false;
         if (micBtnEl && this._speechRecognitionAvailable) micBtnEl.hidden = false;
         // Move the xterm element into the new container
         if (container && tp.term) {
@@ -11189,6 +11333,11 @@ class CWMApp {
         if (titleEl) titleEl.textContent = 'Drop a session here';
         if (closeBtn) closeBtn.hidden = true;
         if (uploadBtnEl) uploadBtnEl.hidden = true;
+        if (scheduleBtnEl) {
+          scheduleBtnEl.hidden = true;
+          const badge = scheduleBtnEl.querySelector('.pane-schedule-count');
+          if (badge) { badge.textContent = ''; badge.hidden = true; }
+        }
         if (micBtnEl) { micBtnEl.hidden = true; micBtnEl.classList.remove('mic-active'); }
         if (container) container.innerHTML = '';
       }
