@@ -3510,10 +3510,21 @@ class CWMApp {
     // Check localStorage first
     const titles = JSON.parse(localStorage.getItem('cwm_projectSessionTitles') || '{}');
     if (titles[claudeSessionId]) return titles[claudeSessionId];
-    // Fall back: check if any workspace session with this resumeSessionId has a name
+    // Fall back: check workspace sessions linked by resumeSessionId.
+    // If two sessions share the same UUID (a leftover from older buggy
+    // backfills), `find()` would return whichever came first in iteration
+    // order and label the JSONL with the wrong session's name. Collect all
+    // links, ignore the result if it's ambiguous, and otherwise pick the
+    // most-recently-active one for stable display.
     const allSessions = this.state.allSessions || this.state.sessions || [];
-    const linked = allSessions.find(s => s.resumeSessionId === claudeSessionId && s.name);
-    return linked ? linked.name : null;
+    const linked = allSessions.filter(s => s.resumeSessionId === claudeSessionId && s.name);
+    if (linked.length === 0) return null;
+    if (linked.length > 1) {
+      const ids = linked.map(s => s.id).join(', ');
+      console.warn(`[CWM] Claude UUID ${claudeSessionId} is linked by ${linked.length} sessions (${ids}); not displaying a name fallback`);
+      return null;
+    }
+    return linked[0].name;
   }
 
   /**
@@ -7273,7 +7284,7 @@ class CWMApp {
   _findProjectSession(sessionId) {
     for (const project of (this.state.projects || [])) {
       for (const s of (project.sessions || [])) {
-        if (s.name === sessionId) {
+        if (s.claudeSessionId === sessionId) {
           return { workingDir: project.realPath || '', workspaceId: this.state.activeWorkspace ? this.state.activeWorkspace.id : null };
         }
       }
@@ -7334,7 +7345,7 @@ class CWMApp {
         ].filter(Boolean).join(' ');
 
         const latestSession = p.sessions && p.sessions.length > 0 ? p.sessions[0] : null;
-        const latestSessionId = latestSession ? latestSession.name : '';
+        const latestSessionId = latestSession ? latestSession.claudeSessionId : '';
         const latestSessionTitle = latestSession ? (latestSession.title || '') : '';
         return `<div class="discover-row" data-path="${this.escapeHtml(p.realPath)}" data-name="${this.escapeHtml(name)}" data-session-id="${this.escapeHtml(latestSessionId)}" data-session-title="${this.escapeHtml(latestSessionTitle)}">
           <div class="discover-check">
@@ -8782,7 +8793,7 @@ class CWMApp {
       const sessionSizeMap = {};
       (this.state.projects || []).forEach(p => {
         (p.sessions || []).forEach(ps => {
-          if (ps.size) sessionSizeMap[ps.name] = ps.size;
+          if (ps.size) sessionSizeMap[ps.claudeSessionId] = ps.size;
         });
       });
 
@@ -9661,7 +9672,7 @@ class CWMApp {
         if (name.toLowerCase().includes(query) || encoded.toLowerCase().includes(query) || path.toLowerCase().includes(query)) return true;
         // Match against any session ID, title, or Claude custom-title within this project
         const allSessions = p.sessions || [];
-        return allSessions.some(s => (s.name || '').toLowerCase().includes(query) || (s.title || '').toLowerCase().includes(query));
+        return allSessions.some(s => (s.claudeSessionId || '').toLowerCase().includes(query) || (s.title || '').toLowerCase().includes(query));
       });
     }
 
@@ -9680,7 +9691,7 @@ class CWMApp {
       const sizeStr = p.totalSize ? this.formatSize(p.totalSize) : '';
       const allSessions = p.sessions || [];
       // Filter out hidden project sessions (unless showHidden is on)
-      let sessions = allSessions.filter(s => this.state.showHidden || !this.state.hiddenProjectSessions.has(s.name));
+      let sessions = allSessions.filter(s => this.state.showHidden || !this.state.hiddenProjectSessions.has(s.claudeSessionId));
 
       // When search is active, also filter individual sessions by query
       if (query) {
@@ -9691,9 +9702,9 @@ class CWMApp {
         // If the project itself doesn't match, only show sessions that match
         if (!projectMatches) {
           sessions = sessions.filter(s => {
-            const sName = (s.name || '').toLowerCase();
+            const sName = (s.claudeSessionId || '').toLowerCase();
             const sClaudeTitle = (s.title || '').toLowerCase();
-            const sTitle = (this.getProjectSessionTitle(s.name) || '').toLowerCase();
+            const sTitle = (this.getProjectSessionTitle(s.claudeSessionId) || '').toLowerCase();
             return sName.includes(query) || sClaudeTitle.includes(query) || sTitle.includes(query);
           });
         }
@@ -9701,7 +9712,7 @@ class CWMApp {
 
       // Build session sub-items
       const sessionItems = sessions.map(s => {
-        const sessName = s.name || 'unnamed';
+        const sessName = s.claudeSessionId || 'unnamed';
         const claudeTitle = s.title || null;
         if (claudeTitle && !this.getProjectSessionTitle(sessName)) {
           const titles = JSON.parse(localStorage.getItem('cwm_projectSessionTitles') || '{}');

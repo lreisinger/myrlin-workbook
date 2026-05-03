@@ -1679,7 +1679,7 @@ app.get('/api/discover', requireAuth, (req, res) => {
         sessionCount: sessionFiles.length,
         totalSize,
         lastActive: sessionFiles.length > 0 ? sessionFiles[0].modified : null,
-        sessions: sessionFiles.map(s => ({ name: s.name, modified: s.modified, size: s.size, title: sessionTitles[s.name] || null })),
+        sessions: sessionFiles.map(s => ({ claudeSessionId: s.name, modified: s.modified, size: s.size, title: sessionTitles[s.name] || null })),
       });
     }
 
