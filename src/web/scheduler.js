@@ -24,6 +24,12 @@ const MIN_DELAY_MS = 1_000;           // 1 second
 const MAX_COMMAND_BYTES = 2048;
 const HISTORY_CAP_PER_SESSION = 50;
 const SAVE_DEBOUNCE_MS = 200;
+// Gap between writing the message text and writing the Enter key. TUIs that
+// support bracketed-paste mode (Claude Code, etc) treat a single fast burst
+// ending in \r as a paste — and \r inside a paste becomes a literal newline
+// rather than a submit. Splitting the writes makes the second one register
+// as a real Enter keypress.
+const SUBMIT_DELAY_MS = 80;
 
 const DEFAULT_CLOCK = { now: () => Date.now() };
 function defaultSchedule(fn, ms) { return setTimeout(fn, ms); }
@@ -272,12 +278,19 @@ class Scheduler {
       return;
     }
 
-    // Success path
+    // Success path. Write the message text first, then fire the Enter
+    // key as a separate write after a short gap (see SUBMIT_DELAY_MS comment).
     try {
-      session.pty.write(s.command + '\r');
+      session.pty.write(s.command);
     } catch (err) {
       console.error('[Scheduler] pty.write failed:', err.message);
     }
+    this.schedule(() => {
+      const live = this.ptyManager && this.ptyManager.getSession(s.sessionId);
+      if (!live || !live.alive) return;
+      try { live.pty.write('\r'); }
+      catch (err) { console.error('[Scheduler] pty.write \\r failed:', err.message); }
+    }, SUBMIT_DELAY_MS);
 
     this._appendHistory(s.sessionId, {
       id: s.id, command: s.command, firedAt, scheduledAt,

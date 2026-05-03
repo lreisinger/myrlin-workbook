@@ -175,7 +175,7 @@ test('start() arms a timer for every active schedule', () => {
   assertEqual(fireTimers.length, 2);
 });
 
-test('fire() writes command + carriage return to alive pty', () => {
+test('fire() writes message then \\r as separate writes (paste-mode safe)', () => {
   const f = makeScheduler();
   f.ptyManager.setSession('sess-A', /*alive*/ true);
   const s = f.sched.create('sess-A', { command: 'npm test', kind: 'once', delayMs: 1000 });
@@ -183,9 +183,16 @@ test('fire() writes command + carriage return to alive pty', () => {
   const handle = f.armed.find(h => h.ms === 1000);
   f.clock.advance(1000);
   handle.fn();
+  // First write: just the message text, no carriage return.
   assertEqual(f.ptyManager.writes.length, 1);
   assertEqual(f.ptyManager.writes[0].id, 'sess-A');
-  assertEqual(f.ptyManager.writes[0].data, 'npm test\r');
+  assertEqual(f.ptyManager.writes[0].data, 'npm test');
+  // The Enter is scheduled separately. Find and fire the submit timer.
+  const submit = f.armed.find(h => h.ms === 80 && !h.cancelled);
+  assert(submit, 'expected submit timer scheduled');
+  submit.fn();
+  assertEqual(f.ptyManager.writes.length, 2);
+  assertEqual(f.ptyManager.writes[1].data, '\r');
 });
 
 test('one-off schedule deletes after successful fire', () => {
@@ -223,11 +230,14 @@ test('create() after start() arms a timer immediately', () => {
   const s = f.sched.create('sess-A', { command: 'live', kind: 'once', delayMs: 7000 });
   // A 7s timer must be armed (in addition to any save-debounce 200ms timers)
   assert(f.armed.some(h => h.ms === 7000), 'expected 7s timer armed for runtime-created schedule');
-  // And firing it should reach the pty
+  // And firing it should reach the pty (text first, then \r via submit timer)
   f.clock.advance(7000);
   f.armed.find(h => h.ms === 7000).fn();
   assertEqual(f.ptyManager.writes.length, 1);
-  assertEqual(f.ptyManager.writes[0].data, 'live\r');
+  assertEqual(f.ptyManager.writes[0].data, 'live');
+  f.armed.find(h => h.ms === 80 && !h.cancelled).fn();
+  assertEqual(f.ptyManager.writes.length, 2);
+  assertEqual(f.ptyManager.writes[1].data, '\r');
 });
 
 test('successful fire appends a success history row', () => {
