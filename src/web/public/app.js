@@ -3509,10 +3509,21 @@ class CWMApp {
     // Check localStorage first
     const titles = JSON.parse(localStorage.getItem('cwm_projectSessionTitles') || '{}');
     if (titles[claudeSessionId]) return titles[claudeSessionId];
-    // Fall back: check if any workspace session with this resumeSessionId has a name
+    // Fall back: check workspace sessions linked by resumeSessionId.
+    // If two sessions share the same UUID (a leftover from older buggy
+    // backfills), `find()` would return whichever came first in iteration
+    // order and label the JSONL with the wrong session's name. Collect all
+    // links, ignore the result if it's ambiguous, and otherwise pick the
+    // most-recently-active one for stable display.
     const allSessions = this.state.allSessions || this.state.sessions || [];
-    const linked = allSessions.find(s => s.resumeSessionId === claudeSessionId && s.name);
-    return linked ? linked.name : null;
+    const linked = allSessions.filter(s => s.resumeSessionId === claudeSessionId && s.name);
+    if (linked.length === 0) return null;
+    if (linked.length > 1) {
+      const ids = linked.map(s => s.id).join(', ');
+      console.warn(`[CWM] Claude UUID ${claudeSessionId} is linked by ${linked.length} sessions (${ids}); not displaying a name fallback`);
+      return null;
+    }
+    return linked[0].name;
   }
 
   /**
