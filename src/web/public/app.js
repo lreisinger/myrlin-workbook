@@ -1422,6 +1422,14 @@ class CWMApp {
         return;
       }
 
+      // Pip click — navigate to that instance (handled BEFORE session-item click).
+      const pip = e.target.closest('.instance-indicator');
+      if (pip && pip.dataset.tabId) {
+        e.stopPropagation();
+        this._navigateToInstance(pip.dataset.tabId, parseInt(pip.dataset.slot, 10));
+        return;
+      }
+
       const wsSessionItem = e.target.closest('.ws-session-item');
       if (wsSessionItem) {
         e.stopPropagation();
@@ -4160,12 +4168,16 @@ class CWMApp {
   }
 
   /** Render one indicator: top half = tab colour, bottom half = slot colour, 1px divider. */
-  renderInstanceIndicator({ tabColor, slotColor, title }) {
+  renderInstanceIndicator({ tabColor, slotColor, title, tabId, slot }) {
     return `<span class="instance-indicator"
       title="${this.escapeHtml(title || '')}"
+      data-tab-id="${this.escapeHtml(tabId)}"
+      data-slot="${slot}"
       style="--c-outer:var(--${tabColor});
              --c-inner:var(--${slotColor})">
-      <span class="instance-indicator-inner"></span>
+      <span class="instance-indicator-square">
+        <span class="instance-indicator-inner"></span>
+      </span>
     </span>`;
   }
 
@@ -4179,6 +4191,8 @@ class CWMApp {
         tabColor:  this.getTabColor(inst.tabId),
         slotColor: this.PANE_SLOT_COLORS[inst.slot % this.PANE_SLOT_COLORS.length],
         title:     this._formatInstanceTooltip(inst),
+        tabId:     inst.tabId,
+        slot:      inst.slot,
       })).join('')
     }</span>`;
   }
@@ -4188,6 +4202,23 @@ class CWMApp {
     const tab = (this._tabGroups || []).find(g => g.id === tabId);
     const tabName = tab ? tab.name : '?';
     return `${tabName} › slot ${slot + 1}`;
+  }
+
+  /** Navigate to a session instance: switch to its tab, then briefly pulse the pane. */
+  _navigateToInstance(tabId, slot) {
+    if (this._activeGroupId !== tabId) {
+      this.switchTerminalGroup(tabId);
+    }
+    // Pulse the target pane on the next frame so the switch has rendered.
+    requestAnimationFrame(() => {
+      const paneEls = document.querySelectorAll('.terminal-pane');
+      const paneEl = paneEls[slot];
+      if (!paneEl) return;
+      paneEl.classList.remove('pane-nav-pulse');
+      void paneEl.offsetWidth;                 // force reflow so the animation restarts
+      paneEl.classList.add('pane-nav-pulse');
+      setTimeout(() => paneEl.classList.remove('pane-nav-pulse'), 800);
+    });
   }
 
   /** Open the settings overlay */
