@@ -809,6 +809,7 @@ const standaloneTests = [
   'pty-watcher.test.js',
   'scheduler.test.js',
   'scheduler-api.test.js',
+  'instance-colors.test.js',
 ];
 
 let standaloneFailed = 0;

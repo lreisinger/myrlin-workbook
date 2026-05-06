@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.34] - 2026-05-06
+
+### Added
+
+- **Cross-tab session pips with click-to-navigate** - Sidebar pips now show one entry per place a session is open across all tab groups (was: only the current tab). Each pip is a 10x10 two-color square: top stripe = tab's global positional color, bottom = pane slot color. Together they uniquely encode pane location. Tabs in the top strip carry a positional rainbow color (red, yellow, green, teal, blue, mauve). Click a pip to navigate to that tab+slot with a pulse animation drawing the eye to the target. Pure-data logic extracted to `instance-colors.js` (UMD wrapper). 13 new tests. Resolves #59. (PR #60 by @lreisinger)
+
 ## [0.9.33] - 2026-05-03
 
 ### Added
