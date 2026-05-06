@@ -148,6 +148,7 @@ class CWMApp {
     // Key: groupId, Value: { panes: [TerminalPane|null x MAX_PANES], domFragments: [DocumentFragment|null x MAX_PANES] }
     this._groupPaneCache = {};
     this.PANE_SLOT_COLORS = ['mauve', 'blue', 'green', 'peach', 'red', 'pink'];
+    this.TAB_COLORS = (window.InstanceColors && window.InstanceColors.TAB_COLORS) || [];
     this._gridColSizes = [1, 1];  // fr ratios for column widths
     this._gridRowSizes = [1, 1];  // fr ratios for row heights
     // Voice recognition instances per slot (for mic-to-terminal input)
@@ -1418,6 +1419,14 @@ class CWMApp {
           { icon: '✏️', label: 'Rename', action: () => this.renameWorkspace(wsId) },
           { icon: '🗑️', label: 'Delete', danger: true, action: () => this.deleteWorkspace(wsId) },
         ], rect.right, rect.bottom);
+        return;
+      }
+
+      // Pip click — navigate to that instance (handled BEFORE session-item click).
+      const pip = e.target.closest('.instance-indicator');
+      if (pip && pip.dataset.tabId) {
+        e.stopPropagation();
+        this._navigateToInstance(pip.dataset.tabId, parseInt(pip.dataset.slot, 10));
         return;
       }
 
@@ -4148,14 +4157,68 @@ class CWMApp {
     });
   }
 
-  /** Find which pane slot (0-3) a session is open in, or -1 if not found */
-  getSlotForSession(sessionId) {
-    for (let i = 0; i < this.terminalPanes.length; i++) {
-      if (this.terminalPanes[i] && this.terminalPanes[i].sessionId === sessionId) {
-        return i;
-      }
+  /** Return one entry per place a session is open across all tab groups. */
+  getSessionInstances(sessionId) {
+    return window.InstanceColors.getSessionInstances(sessionId, this._tabGroups || []);
+  }
+
+  /** Return the (positional) colour for a tab — global index across all tabs. */
+  getTabColor(tabId) {
+    return window.InstanceColors.getTabColor(tabId, this._tabGroups || []);
+  }
+
+  /** Render one indicator: top half = tab colour, bottom half = slot colour, 1px divider. */
+  renderInstanceIndicator({ tabColor, slotColor, title, tabId, slot }) {
+    return `<span class="instance-indicator"
+      title="${this.escapeHtml(title || '')}"
+      data-tab-id="${this.escapeHtml(tabId)}"
+      data-slot="${slot}"
+      style="--c-outer:var(--${tabColor});
+             --c-inner:var(--${slotColor})">
+      <span class="instance-indicator-square">
+        <span class="instance-indicator-inner"></span>
+      </span>
+    </span>`;
+  }
+
+  /** Render the full row of indicators for a session, or empty string. */
+  renderInstanceIndicatorRow(sessionId) {
+    if (!this.state.settings.paneColorHighlights) return '';
+    const instances = this.getSessionInstances(sessionId);
+    if (!instances.length) return '';
+    return `<span class="instance-indicator-row">${
+      instances.map(inst => this.renderInstanceIndicator({
+        tabColor:  this.getTabColor(inst.tabId),
+        slotColor: this.PANE_SLOT_COLORS[inst.slot % this.PANE_SLOT_COLORS.length],
+        title:     this._formatInstanceTooltip(inst),
+        tabId:     inst.tabId,
+        slot:      inst.slot,
+      })).join('')
+    }</span>`;
+  }
+
+  /** Build a textual tooltip for an instance: "<tab> › slot N". */
+  _formatInstanceTooltip({ tabId, slot }) {
+    const tab = (this._tabGroups || []).find(g => g.id === tabId);
+    const tabName = tab ? tab.name : '?';
+    return `${tabName} › slot ${slot + 1}`;
+  }
+
+  /** Navigate to a session instance: switch to its tab, then briefly pulse the pane. */
+  _navigateToInstance(tabId, slot) {
+    if (this._activeGroupId !== tabId) {
+      this.switchTerminalGroup(tabId);
     }
-    return -1;
+    // Pulse the target pane on the next frame so the switch has rendered.
+    requestAnimationFrame(() => {
+      const paneEls = document.querySelectorAll('.terminal-pane');
+      const paneEl = paneEls[slot];
+      if (!paneEl) return;
+      paneEl.classList.remove('pane-nav-pulse');
+      void paneEl.offsetWidth;                 // force reflow so the animation restarts
+      paneEl.classList.add('pane-nav-pulse');
+      setTimeout(() => paneEl.classList.remove('pane-nav-pulse'), 800);
+    });
   }
 
   /** Open the settings overlay */
@@ -8862,11 +8925,8 @@ class CWMApp {
           }
         }
 
-        // Pane color pip — show matching dot if session is open in a terminal slot
-        const slotIdx = this.getSlotForSession(s.id);
-        const pip = (slotIdx !== -1 && this.state.settings.paneColorHighlights)
-          ? `<span class="pane-color-pip" style="background:var(--${this.PANE_SLOT_COLORS[slotIdx]})"></span>`
-          : '';
+        // Three-layer indicator — one per place this session is open across all tab groups
+        const pip = this.renderInstanceIndicatorRow(s.id);
 
         // Build meta row (badges + size + time) — only if there's something to show
         const metaParts = [badges, sizeStr ? `<span class="ws-session-size">${sizeStr}</span>` : ''].filter(Boolean).join('');
@@ -8874,8 +8934,8 @@ class CWMApp {
         const timeEl = timeStr ? `<span class="ws-session-time">${timeStr}</span>` : '';
 
         return `<div class="ws-session-item${isHidden ? ' ws-session-hidden' : ''}" data-session-id="${s.id}" draggable="true" title="${this.escapeHtml(s.workingDir || '')}">
-          <span class="ws-session-dot${tristateAttr}" style="background: ${statusDot}"></span>${pip}
-          <span class="ws-session-name">${this.escapeHtml(name)}</span>${timeEl}
+          <span class="ws-session-dot${tristateAttr}" style="background: ${statusDot}"></span>
+          <span class="ws-session-name">${this.escapeHtml(name)}</span>${pip}${timeEl}
           ${metaRow}
         </div>`;
       };
@@ -10543,13 +10603,12 @@ class CWMApp {
       this.switchTerminalTab(slotIdx);
     }
 
-    // Re-render sidebar to show pane color pips
-    if (this.state.settings.paneColorHighlights) {
-      this.renderWorkspaces();
-    }
-
     // Refresh pinned-notes badge for this pane now that a session is loaded
     this._refreshPanePin(slotIdx);
+
+    // Route through the centralised chokepoint so the sidebar indicator and
+    // server-persisted layout reflect the new pane.
+    this.saveTerminalLayout();
   }
 
   /**
@@ -11025,14 +11084,13 @@ class CWMApp {
       this.updateTerminalTabs();
     }
 
-    // Re-render sidebar to remove pane color pips
-    if (this.state.settings.paneColorHighlights) {
-      this.renderWorkspaces();
-    }
-
     if (sessionName) {
       this.showToast(`"${sessionName}" moved to background - drag it back to reconnect`, 'info');
     }
+
+    // Route through the centralised chokepoint so the sidebar indicator and
+    // server-persisted layout reflect the closed pane.
+    this.saveTerminalLayout();
   }
 
   /**
@@ -11360,6 +11418,10 @@ class CWMApp {
         if (tp) tp.safeFit();
       });
     });
+
+    // Route through the centralised chokepoint so the sidebar indicator and
+    // server-persisted layout reflect the swapped panes.
+    this.saveTerminalLayout();
   }
 
   updateTerminalGridLayout() {
@@ -13413,7 +13475,10 @@ class CWMApp {
       const tp = this.terminalPanes.find((_, i) => p.slot === i);
       return tp !== null;
     });
-    return `<button class="terminal-group-tab${isActive ? ' active' : ''}" data-group-id="${g.id}">
+    const tabColor = this.getTabColor(g.id);
+    return `<button class="terminal-group-tab${isActive ? ' active' : ''}"
+      data-group-id="${g.id}"
+      style="--tab-color:var(--${tabColor})">
       <span class="terminal-group-tab-dot${hasActive ? '' : ' inactive'}"></span>
       <span class="terminal-group-tab-name">${this.escapeHtml(g.name)}</span>
       ${paneCount > 0 ? `<span class="terminal-group-tab-count">${paneCount}</span>` : ''}
@@ -14351,7 +14416,24 @@ class CWMApp {
     });
   }
 
+  /**
+   * Central chokepoint for tab/pane mutations. Performs three things in order:
+   *   1. Synchronously flushes live pane state via `saveCurrentGroupPanes()`.
+   *   2. Synchronously re-renders the sidebar via `renderWorkspaces()`.
+   *   3. Schedules a debounced (500ms) PUT to /api/layout for server persistence.
+   * Callers that mutate `terminalPanes` or `_tabGroups` should route through
+   * this method rather than calling `renderWorkspaces()` themselves. Note:
+   * `renderWorkspaces()` does not feed back into `saveTerminalLayout()`, so
+   * there is no recursion.
+   */
   saveTerminalLayout() {
+    // Flush live pane state into _tabGroups[*].panes synchronously so the
+    // sidebar indicator (which reads from _tabGroups) is fresh — the
+    // server PUT below stays debounced.
+    this.saveCurrentGroupPanes();
+    if (typeof this.renderWorkspaces === 'function') {
+      this.renderWorkspaces();
+    }
     clearTimeout(this._layoutSaveTimer);
     this._layoutSaveTimer = setTimeout(async () => {
       this.saveCurrentGroupPanes();

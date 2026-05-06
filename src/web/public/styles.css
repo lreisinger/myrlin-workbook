@@ -1290,7 +1290,7 @@ textarea.input {
   flex-wrap: wrap;
   align-items: center;
   gap: 4px 6px;
-  padding: 5px 10px 5px 34px;
+  padding: 5px 10px 5px 24px;
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background var(--transition-fast);
@@ -5197,17 +5197,65 @@ html.pane-colors-enabled .terminal-pane:not(.terminal-pane-empty)[data-slot="5"]
   border-left: 3px solid var(--pink);
 }
 
-/* ─── Sidebar Pane Color Pip ───────────────────────────── */
-.pane-color-pip {
-  display: inline-block;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
+/* ─── Sidebar Session Instance Indicator ───────────────── */
+.instance-indicator-row {
+  display: inline-flex;
+  gap: 0;                /* per-pip 2px padding provides spacing */
+  margin-left: 4px;
   flex-shrink: 0;
-  margin-left: 2px;
 }
-html:not(.pane-colors-enabled) .pane-color-pip {
+.instance-indicator {
+  padding: 2px;          /* invisible 2px hit-area extension; also growth room */
+  cursor: pointer;
+  display: inline-block;
+  line-height: 0;
+  flex-shrink: 0;
+}
+.instance-indicator-square {
+  width: 10px;
+  height: 10px;
+  border-radius: 1px;
+  background: var(--c-outer);
+  position: relative;
+  overflow: hidden;
+  display: inline-block;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+  transform-origin: center center;
+}
+.instance-indicator:hover .instance-indicator-square {
+  transform: scale(1.1);
+}
+/* Hover ring around the visible square — disabled for now.
+.instance-indicator:hover .instance-indicator-square {
+  box-shadow: 0 0 0 1.5px var(--c-outer);
+}
+*/
+.instance-indicator-inner {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 7px;
+  background: var(--c-inner);
+  border-top: 1px solid #000;
+  box-sizing: border-box;
+}
+html:not(.pane-colors-enabled) .instance-indicator-row {
   display: none;
+}
+
+/* Pane pulse — short flash when navigating from a sidebar pip */
+@keyframes pane-nav-pulse {
+  0%   { background-color: rgba(205, 214, 244, 0.05); box-shadow: inset 0 0 0 3px var(--text), 0 0 16px rgba(205, 214, 244, 0.4); }
+  100% { background-color: transparent; box-shadow: inset 0 0 0 0 transparent, 0 0 0 transparent; }
+}
+.pane-nav-pulse::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  animation: pane-nav-pulse 700ms ease-out forwards;
 }
 
 /* ─── Tri-State Dots (Worktree Tasks) ─────────────────── */
@@ -5461,9 +5509,22 @@ html.activity-indicators-disabled .terminal-pane-activity {
   transition: all var(--transition-fast);
   position: relative;
   /* Touch: let DragDropTouch polyfill handle long-press-to-drag without the
-     browser claiming the gesture for the scrollable tab strip. 
+     browser claiming the gesture for the scrollable tab strip.
   */
   touch-action: none;
+}
+
+.terminal-group-tab::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  transform: translateX(-50%);
+  width: 85%;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--tab-color);
+  pointer-events: none;
 }
 
 .terminal-group-tab:hover {
@@ -5480,12 +5541,16 @@ html.activity-indicators-disabled .terminal-pane-activity {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--green);
+  background: var(--tab-color);
   flex-shrink: 0;
 }
 
 .terminal-group-tab-dot.inactive {
-  background: var(--surface2);
+  opacity: 0.4;
+}
+
+.terminal-group-tab-name {
+  color: var(--tab-color);
 }
 
 .terminal-group-tab-count {
